@@ -29,11 +29,12 @@ enum SigningAssetKind: String, Codable, CaseIterable, Identifiable {
         }
     }
 
-    /// Files providers frequently expose signing inputs as generic data even
-    /// when the filename has a known extension. Accept generic data here and
-    /// validate the extension after the security-scoped URL is returned.
+    /// Files providers do not consistently advertise signing assets as
+    /// `public.data`: `.p12` and `.mobileprovision` may be exposed under a
+    /// provider-specific UTI. Accept any file in the picker and enforce the
+    /// extension after selection in `importAsset`.
     var fileImporterContentTypes: [UTType] {
-        [.data]
+        [.item]
     }
 }
 
