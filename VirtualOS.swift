@@ -11,7 +11,7 @@ enum VirtualAppStatus: String, Codable, CaseIterable {
     var label: String {
         switch self {
         case .builtIn: return "System app"
-        case .imported: return "Imported IPA"
+        case .imported: return "Stored locally"
         case .ready: return "Ready"
         case .unsupported: return "Runtime unavailable"
         }
