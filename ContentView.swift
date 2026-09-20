@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 struct ContentView: View {
     @ObservedObject var store: WorkspaceStore
@@ -9,9 +10,8 @@ struct ContentView: View {
     @State private var pendingRemoval: VirtualApp?
 
     private var launcherApps: [VirtualApp] {
-        // Workspace-owned tools always stay on the launcher. The native build
-        // appends LiveContainer's installed guest apps below this grid.
-        store.homeApps.filter { $0.isBuiltIn || $0.systemApp != nil }
+        // Workspace-owned tools and imported virtual apps share the fixed launcher.
+        store.homeApps
     }
 
     private var launcherItemCount: Int {
@@ -42,7 +42,8 @@ struct ContentView: View {
                             showLabels: store.settings.showAppLabels,
                             onOpenApp: open,
                             onRemoveApp: requestRemoval,
-                            onOpenFolder: { folder = $0 }
+                            onOpenFolder: { folder = $0 },
+                            onReorder: store.reorderHomeApps
                         )
 #if LIVE_CONTAINER_NATIVE
                         NativeLiveContainerHomeGrid(
@@ -146,6 +147,7 @@ private struct HomeGrid: View {
     let onOpenApp: (VirtualApp) -> Void
     let onRemoveApp: (VirtualApp) -> Void
     let onOpenFolder: (VirtualFolder) -> Void
+    let onReorder: (UUID, UUID) -> Void
 
     private var gridColumns: [GridItem] {
         Array(repeating: GridItem(.flexible(minimum: 74, maximum: 120), spacing: 16), count: max(2, min(columns, 5)))
@@ -160,6 +162,8 @@ private struct HomeGrid: View {
                     action: { onOpenApp(app) },
                     onRemove: app.isBuiltIn ? nil : { onRemoveApp(app) }
                 )
+                .onDrag { NSItemProvider(object: app.id.uuidString as NSString) }
+                .onDrop(of: [.text], delegate: HomeAppDropDelegate(target: app, onReorder: onReorder))
             }
             ForEach(folders) { folder in
                 FolderIconButton(folder: folder, showLabel: showLabels, action: { onOpenFolder(folder) })
@@ -201,6 +205,25 @@ private struct AppIconButton: View {
                 Button("Remove app", role: .destructive, action: onRemove)
             }
         }
+    }
+}
+
+private struct HomeAppDropDelegate: DropDelegate {
+    let target: VirtualApp
+    let onReorder: (UUID, UUID) -> Void
+
+    func performDrop(info: DropInfo) -> Bool {
+        guard let provider = info.itemProviders(for: [.text]).first else { return false }
+        provider.loadItem(forTypeIdentifier: UTType.text.identifier, options: nil) { item, _ in
+            let value: String?
+            if let data = item as? Data { value = String(data: data, encoding: .utf8) }
+            else if let text = item as? String { value = text }
+            else if let text = item as? NSString { value = text as String }
+            else { value = nil }
+            guard let value, let sourceID = UUID(uuidString: value) else { return }
+            DispatchQueue.main.async { onReorder(sourceID, target.id) }
+        }
+        return true
     }
 }
 

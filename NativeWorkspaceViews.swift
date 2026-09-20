@@ -94,6 +94,8 @@ final class NativeWorkspaceHomeLauncher: NSObject, ObservableObject, LCAppModelD
         Task {
             do {
                 try await app.runApp()
+                try? await Task.sleep(nanoseconds: 350_000_000)
+                WorkspaceGuestHomeOverlayController.shared.show()
             } catch {
                 errorMessage = error.localizedDescription
             }
@@ -142,6 +144,65 @@ final class NativeWorkspaceHomeLauncher: NSObject, ObservableObject, LCAppModelD
         if enabled {
             LCSharedUtils.launchToGuestApp(withClassicMode: classicMode)
         }
+    }
+}
+
+@MainActor
+final class WorkspaceGuestHomeOverlayController {
+    static let shared = WorkspaceGuestHomeOverlayController()
+    private var window: UIWindow?
+
+    func show() {
+        guard window == nil else { return }
+        let activeScenes = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .filter({ $0.activationState == .foregroundActive })
+        guard let scene = activeScenes.first(where: { $0.session.configuration.name != "Main" }) ?? activeScenes.first else { return }
+        let overlay = UIWindow(windowScene: scene)
+        overlay.backgroundColor = .clear
+        overlay.windowLevel = UIWindow.Level(rawValue: UIWindow.Level.statusBar.rawValue + 1)
+        let session = scene.session
+        overlay.rootViewController = UIHostingController(rootView: WorkspaceGuestHomeOverlay { [weak self] in
+            self?.hide()
+            UIApplication.shared.requestSceneSessionDestruction(session, options: nil)
+        })
+        overlay.isHidden = false
+        window = overlay
+    }
+
+    func hide() {
+        window?.isHidden = true
+        window = nil
+    }
+}
+
+private struct WorkspaceGuestHomeOverlay: View {
+    let onHome: () -> Void
+
+    var body: some View {
+        GeometryReader { proxy in
+            let landscape = proxy.size.width > proxy.size.height
+            HStack {
+                if landscape { homeButton }
+                Spacer(minLength: 0)
+                if !landscape { homeButton }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.vertical, 24)
+            .padding(landscape ? .leading : .trailing, 6)
+        }
+        .ignoresSafeArea()
+    }
+
+    private var homeButton: some View {
+        Button(action: onHome) {
+            Capsule().fill(.primary.opacity(0.78)).frame(width: 6, height: 92)
+        }
+        .frame(width: 44, height: 120)
+        .contentShape(Rectangle())
+        .buttonStyle(.plain)
+        .accessibilityLabel("Return to Workspace home")
+        .accessibilityHint("Closes the LiveContainer app window")
     }
 }
 
@@ -247,7 +308,7 @@ struct NativeIPASignerView: View {
                 }
 
                 Section {
-                    Button(signer.isSigning ? "Signing..." : "Sign IPA") {
+                    Button(signer.isSigning ? "Signing..." : "Sign and export IPA") {
                         signer.sign(
                             packageURL: packageStore.packageURL,
                             certificate: assetStore.data(for: .certificate),

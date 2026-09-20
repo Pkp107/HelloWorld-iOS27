@@ -519,7 +519,7 @@ private struct InstallerInstallChoiceView: View {
                 } label: {
                     HStack {
                         if isWorking { ProgressView().tint(.white) }
-                        Text(mode == .sign ? "Sign and install" : "Install with LiveContainer")
+                        Text(mode == .sign ? "Sign and export" : "Install with LiveContainer")
                             .font(.body.weight(.semibold))
                     }
                     .frame(maxWidth: .infinity, minHeight: 50)
@@ -541,10 +541,8 @@ private struct InstallerInstallChoiceView: View {
 #if LIVE_CONTAINER_NATIVE
             .onChange(of: signer.signedIPAURL) { _, url in
                 guard let url else { return }
-                NativeWorkspaceInstaller.shared.install(url: url)
-                statusMessage = "Signed app installed into LiveContainer."
+                statusMessage = "Signed IPA is ready in Workspace Files / Signed. Export it to your sideloading tool to install it on the device Home Screen."
                 isWorking = false
-                dismiss()
             }
 #endif
         }
@@ -569,9 +567,16 @@ private struct InstallerInstallChoiceView: View {
             SecureField("Certificate password", text: $certificatePassword)
                 .textContentType(.password)
                 .onChange(of: certificatePassword) { _, value in WorkspaceCertificatePasswordStore.save(value) }
-            Text("The signed app is also installed into LiveContainer after signing.")
+            Text("Signing creates a device-installable IPA and saves it in Workspace Files / Signed. iOS requires a user-driven sideloading tool to place it on the physical Home Screen.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
+#if LIVE_CONTAINER_NATIVE
+            if let signedIPAURL = signer.signedIPAURL {
+                ShareLink(item: signedIPAURL) {
+                    Label("Export signed IPA", systemImage: "square.and.arrow.up")
+                }
+            }
+#endif
         }
     }
 
@@ -706,6 +711,9 @@ private struct WorkspaceFolderView: View {
         }
         .listStyle(.insetGrouped)
         .navigationTitle(folder)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            WorkspacePathBreadcrumb(path: ["Workspace Files", folder])
+        }
     }
 
     private func use(_ file: URL) {
@@ -723,6 +731,27 @@ private struct WorkspaceFolderView: View {
         default:
             store.importError = "This file type is stored for sharing only."
         }
+    }
+}
+
+private struct WorkspacePathBreadcrumb: View {
+    let path: [String]
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "folder.fill")
+                .foregroundStyle(.secondary)
+            Text(path.joined(separator: " / "))
+                .font(.footnote.weight(.medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 8)
+        .background(.bar)
+        .accessibilityLabel("Current folder: " + path.joined(separator: " / "))
     }
 }
 

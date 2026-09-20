@@ -212,6 +212,33 @@ struct VirtualApp: Identifiable, Codable, Hashable {
     var addedAt: Date
     var lastOpened: Date?
     var systemApp: SystemAppKind?
+    var homeOrder: Int? = nil
+}
+
+extension VirtualApp {
+    private enum CodingKeys: String, CodingKey {
+        case id, displayName, bundleIdentifier, version, iconSymbol, iconColor, category, ipaFileName, isBuiltIn, isPinned, folderID, status, addedAt, lastOpened, systemApp, homeOrder
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        displayName = try c.decode(String.self, forKey: .displayName)
+        bundleIdentifier = try c.decode(String.self, forKey: .bundleIdentifier)
+        version = try c.decode(String.self, forKey: .version)
+        iconSymbol = try c.decode(String.self, forKey: .iconSymbol)
+        iconColor = try c.decode(String.self, forKey: .iconColor)
+        category = try c.decode(String.self, forKey: .category)
+        ipaFileName = try c.decodeIfPresent(String.self, forKey: .ipaFileName)
+        isBuiltIn = try c.decode(Bool.self, forKey: .isBuiltIn)
+        isPinned = try c.decode(Bool.self, forKey: .isPinned)
+        folderID = try c.decodeIfPresent(UUID.self, forKey: .folderID)
+        status = try c.decode(VirtualAppStatus.self, forKey: .status)
+        addedAt = try c.decode(Date.self, forKey: .addedAt)
+        lastOpened = try c.decodeIfPresent(Date.self, forKey: .lastOpened)
+        systemApp = try c.decodeIfPresent(SystemAppKind.self, forKey: .systemApp)
+        homeOrder = try c.decodeIfPresent(Int.self, forKey: .homeOrder)
+    }
 }
 
 struct VirtualFolder: Identifiable, Codable, Hashable {
@@ -367,9 +394,30 @@ final class WorkspaceStore: ObservableObject {
 
     var homeApps: [VirtualApp] {
         apps.filter { $0.folderID == nil }.sorted { lhs, rhs in
-            if lhs.isBuiltIn != rhs.isBuiltIn { return lhs.isBuiltIn }
-            return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+            switch (lhs.homeOrder, rhs.homeOrder) {
+            case let (left?, right?) where left != right: return left < right
+            case (_?, nil): return true
+            case (nil, _?): return false
+            default:
+                if lhs.isBuiltIn != rhs.isBuiltIn { return lhs.isBuiltIn }
+                return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+            }
         }
+    }
+
+    func reorderHomeApps(from source: UUID, to target: UUID) {
+        let ordered = homeApps
+        guard let sourceIndex = ordered.firstIndex(where: { $0.id == source }),
+              let targetIndex = ordered.firstIndex(where: { $0.id == target }),
+              sourceIndex != targetIndex else { return }
+        var ids = ordered.map(\.id)
+        let moved = ids.remove(at: sourceIndex)
+        ids.insert(moved, at: max(0, min(targetIndex, ids.count)))
+        for (index, id) in ids.enumerated() {
+            guard let appIndex = apps.firstIndex(where: { $0.id == id }) else { continue }
+            apps[appIndex].homeOrder = index
+        }
+        save()
     }
 
     /// Non-system packages managed by the LiveContainer runtime.
@@ -536,7 +584,8 @@ final class WorkspaceStore: ObservableObject {
                 status: .imported,
                 addedAt: .now,
                 lastOpened: nil,
-                systemApp: nil
+                systemApp: nil,
+                homeOrder: nil
             ))
             save()
 #endif
@@ -828,7 +877,8 @@ final class WorkspaceStore: ObservableObject {
             status: .builtIn,
             addedAt: .now,
             lastOpened: nil,
-            systemApp: kind
+            systemApp: kind,
+            homeOrder: SystemAppKind.allCases.firstIndex(of: kind)
         )
     }
 }
