@@ -38,6 +38,6 @@ cp "${ROOT_DIR}/NativeLCTabView.swift" "${BUILD_ROOT}/LiveContainerSwiftUI/Views
 # Give this host and all of its derived extensions an identity distinct from
 # an installed upstream LiveContainer. The extension identifiers remain
 # derived from the host identifier by the upstream xcconfig files.
-sed -i '' "s/com\\.kdt\\.livecontainer\\$(DEVELOPMENT_TEAM_SUFFIX)/${WORKSPACE_BUNDLE_IDENTIFIER}\\$(DEVELOPMENT_TEAM_SUFFIX)/" "${BUILD_ROOT}/xcconfigs/Global.xcconfig"
+sed -i '' 's/com\.kdt\.livecontainer$(DEVELOPMENT_TEAM_SUFFIX)/com.pkp107.workspace$(DEVELOPMENT_TEAM_SUFFIX)/' "${BUILD_ROOT}/xcconfigs/Global.xcconfig"
 
 printf '%s\n' "${BUILD_ROOT}"
