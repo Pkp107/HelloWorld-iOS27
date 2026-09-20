@@ -468,6 +468,7 @@ private struct InstallerInstallChoiceView: View {
     @State private var certificatePassword = ""
     @State private var showingCertificateImporter = false
     @State private var showingProfileImporter = false
+    @State private var showingInstallHandoff = false
     @State private var isWorking = false
     @State private var statusMessage: String?
 #if LIVE_CONTAINER_NATIVE
@@ -545,6 +546,13 @@ private struct InstallerInstallChoiceView: View {
                 isWorking = false
             }
 #endif
+            .sheet(isPresented: $showingInstallHandoff) {
+                #if LIVE_CONTAINER_NATIVE
+                if let signedIPAURL = signer.signedIPAURL {
+                    WorkspaceInstallHandoffView(ipaURL: signedIPAURL)
+                }
+                #endif
+            }
         }
     }
 
@@ -574,6 +582,11 @@ private struct InstallerInstallChoiceView: View {
             if let signedIPAURL = signer.signedIPAURL {
                 ShareLink(item: signedIPAURL) {
                     Label("Export signed IPA", systemImage: "square.and.arrow.up")
+                }
+                Button {
+                    showingInstallHandoff = true
+                } label: {
+                    Label("Install on device Home Screen", systemImage: "iphone.and.arrow.forward")
                 }
             }
 #endif

@@ -250,6 +250,7 @@ struct NativeIPASignerView: View {
     @State private var showingPackageImporter = false
     @State private var showingCertificateImporter = false
     @State private var showingProfileImporter = false
+    @State private var showingInstallHandoff = false
     @State private var certificatePassword = ""
 
     var body: some View {
@@ -328,6 +329,11 @@ struct NativeIPASignerView: View {
                         ShareLink(item: signedIPAURL) {
                             Label("Share signed IPA", systemImage: "square.and.arrow.up")
                         }
+                        Button {
+                            showingInstallHandoff = true
+                        } label: {
+                            Label("Install on device Home Screen", systemImage: "iphone.and.arrow.forward")
+                        }
                     }
                     if let statusMessage = signer.statusMessage, !signer.isSigning {
                         Text(statusMessage)
@@ -376,6 +382,11 @@ struct NativeIPASignerView: View {
                 assetStore.errorMessage = error.localizedDescription
             }
         }
+        .sheet(isPresented: $showingInstallHandoff) {
+            if let signedIPAURL = signer.signedIPAURL {
+                WorkspaceInstallHandoffView(ipaURL: signedIPAURL)
+            }
+        }
     }
 
     @ViewBuilder
@@ -398,6 +409,97 @@ struct NativeIPASignerView: View {
                 .buttonStyle(.borderless)
                 .accessibilityLabel("Remove \(kind.label)")
             }
+        }
+    }
+}
+
+struct WorkspaceInstallHandoffView: View {
+    let ipaURL: URL
+    @Environment(\.dismiss) private var dismiss
+    @State private var hostedIPAURL = ""
+    @State private var hostedManifestURL = ""
+    @State private var errorMessage: String?
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("SideStore") {
+                    Text("Host the signed IPA at an HTTPS URL, then send it to SideStore. SideStore performs the device installation and the icon appears on the physical Home Screen.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    TextField("https://example.com/App.ipa", text: $hostedIPAURL)
+                        .textInputAutocapitalization(.never)
+                        .keyboardType(.URL)
+                        .autocorrectionDisabled()
+                    Button("Open in SideStore") {
+                        openSideStore()
+                    }
+                    .disabled(!isHTTPS(hostedIPAURL))
+                }
+
+                Section("Apple OTA installation") {
+                    Text("Host an install-manifest.plist over HTTPS. iOS will show its installation confirmation and place the app on the Home Screen when the profile is valid for this device.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    TextField("https://example.com/manifest.plist", text: $hostedManifestURL)
+                        .textInputAutocapitalization(.never)
+                        .keyboardType(.URL)
+                        .autocorrectionDisabled()
+                    Button("Open OTA installer") {
+                        openOTA()
+                    }
+                    .disabled(!isHTTPS(hostedManifestURL))
+                }
+
+                Section("Local transfer") {
+                    ShareLink(item: ipaURL) {
+                        Label("Share signed IPA", systemImage: "square.and.arrow.up")
+                    }
+                    Text("Use LocalSend, Files, FlekStore, AltStore, or another installer when the IPA is only stored on this phone.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
+                if let errorMessage {
+                    Section {
+                        Text(errorMessage).foregroundStyle(.red)
+                    }
+                }
+            }
+            .navigationTitle("Install on Home Screen")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private func isHTTPS(_ value: String) -> Bool {
+        guard let url = URL(string: value.trimmingCharacters(in: .whitespacesAndNewlines)) else { return false }
+        return url.scheme?.lowercased() == "https" && url.host != nil
+    }
+
+    private func openSideStore() {
+        guard isHTTPS(hostedIPAURL), let encoded = hostedIPAURL.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+              let url = URL(string: "sidestore://install?url=\(encoded)") else {
+            errorMessage = "Enter a valid HTTPS IPA URL."
+            return
+        }
+        UIApplication.shared.open(url) { accepted in
+            if !accepted { errorMessage = "SideStore is not installed or its URL scheme is unavailable." }
+        }
+    }
+
+    private func openOTA() {
+        guard isHTTPS(hostedManifestURL), let encoded = hostedManifestURL.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+              let url = URL(string: "itms-services://?action=download-manifest&url=\(encoded)") else {
+            errorMessage = "Enter a valid HTTPS manifest URL."
+            return
+        }
+        UIApplication.shared.open(url) { accepted in
+            if !accepted { errorMessage = "iOS could not open the OTA installation link." }
         }
     }
 }
