@@ -75,7 +75,7 @@ private struct WorkspaceSigningAssetShareView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { extensionContext?.cancelRequest(withError: nil) }
+                    Button("Cancel") { extensionContext?.cancelRequest(withError: WorkspaceShareError("Cancelled")) }
                 }
             }
             .alert("Could not save file", isPresented: Binding(

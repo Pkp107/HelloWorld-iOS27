@@ -35,6 +35,7 @@ perl -0pi -e 's|\n\@end\s*\z|\n+ (void)workspaceSignAppAtPath:(NSString *)appPat
 # Let the native LiveContainer share service hand supported signing assets to
 # the Workspace app-group inbox before the main app consumes them.
 perl -0pi -e 's|ShareExtensionRootView\(viewModel: viewModel, extensionContext: extensionContext\)|WorkspaceShareRootView(viewModel: viewModel, extensionContext: extensionContext)|' "${BUILD_ROOT}/ShareExtension/ShareExtensionHandler.swift"
+perl -0pi -e 's|UIHostingController<ShareExtensionRootView>|UIHostingController<AnyView>|; s|let root = WorkspaceShareRootView\(viewModel: viewModel, extensionContext: extensionContext\)|let root = AnyView(WorkspaceShareRootView(viewModel: viewModel, extensionContext: extensionContext))|' "${BUILD_ROOT}/ShareExtension/ShareExtensionHandler.swift"
 
 # The upstream application remains the native runtime host; only its SwiftUI
 # root is replaced with the workspace shell. All native launch code remains.
