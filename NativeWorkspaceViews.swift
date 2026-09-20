@@ -31,7 +31,7 @@ struct NativeLiveContainerHomeGrid: View {
     @StateObject private var launcher = NativeWorkspaceHomeLauncher()
 
     private var gridColumns: [GridItem] {
-        Array(repeating: GridItem(.flexible(), spacing: 18), count: max(2, min(columns, 5)))
+        Array(repeating: GridItem(.flexible(minimum: 74, maximum: 120), spacing: 16), count: max(2, min(columns, 5)))
     }
 
     var body: some View {
@@ -62,7 +62,7 @@ struct NativeLiveContainerHomeGrid: View {
                                 .foregroundStyle(.primary)
                         }
                     }
-                    .frame(maxWidth: .infinity, minHeight: showLabels ? 91 : 62)
+                    .frame(maxWidth: .infinity, minHeight: showLabels ? 98 : 74)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(app.displayName)
@@ -192,7 +192,7 @@ struct NativeIPASignerView: View {
                             signer.clearOutput()
                         }
                     }
-                    Text("The selected IPA stays in IPA Signer storage. It is not installed in Workspace or LiveContainer.")
+                    Text("The selected IPA stays in protected Workspace storage until you export the signed result.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -257,7 +257,7 @@ struct NativeIPASignerView: View {
                     }
                 }
             }
-            .navigationTitle("IPA Signer")
+            .navigationTitle("Signing")
         }
         .onAppear {
             if certificatePassword.isEmpty {

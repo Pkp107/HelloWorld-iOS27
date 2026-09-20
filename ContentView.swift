@@ -128,7 +128,7 @@ private struct HomeGrid: View {
     let onOpenFolder: (VirtualFolder) -> Void
 
     private var gridColumns: [GridItem] {
-        Array(repeating: GridItem(.flexible(), spacing: 18), count: max(2, min(columns, 5)))
+        Array(repeating: GridItem(.flexible(minimum: 74, maximum: 120), spacing: 16), count: max(2, min(columns, 5)))
     }
 
     var body: some View {
@@ -165,7 +165,7 @@ private struct AppIconButton: View {
                         .foregroundStyle(.primary)
                 }
             }
-            .frame(maxWidth: .infinity, minHeight: showLabel ? 91 : 62)
+            .frame(maxWidth: .infinity, minHeight: showLabel ? 98 : 74)
         }
         .buttonStyle(.plain)
         .accessibilityLabel(app.displayName)
@@ -194,7 +194,7 @@ private struct FolderIconButton: View {
                         .foregroundStyle(.primary)
                 }
             }
-            .frame(maxWidth: .infinity, minHeight: showLabel ? 91 : 62)
+            .frame(maxWidth: .infinity, minHeight: showLabel ? 98 : 74)
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Folder \(folder.name)")
@@ -265,7 +265,7 @@ struct RuntimeWindow: View {
         case .appLibrary:
             LiveContainerAppsView(store: store, onOpen: onOpen)
         case .ipaSigner:
-            IPASignerView(store: store)
+            InstallerView(store: store, onOpen: onOpen)
         case .installer:
             InstallerView(store: store, onOpen: onOpen)
         case .liveContainer:
@@ -504,7 +504,7 @@ private struct OnboardingJITPage: View {
                         .disabled(certificatePassword.isEmpty)
                         #endif
                     }
-                    Text("These signing files are saved once and reused by IPA Signer. The certificate can also configure LiveContainer JIT.")
+                    Text("These signing files are saved once and reused by Installer. The certificate can also configure LiveContainer JIT.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                     Text("From Files, share both files to Workspace. They will appear here automatically.")

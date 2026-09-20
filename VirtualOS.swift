@@ -9,13 +9,16 @@ enum SystemAppKind: String, Codable, CaseIterable, Hashable {
     // case is intentionally excluded from `allCases` so it is never seeded.
     case appLibrary
     case settings
+    // Retained for decoding older workspace snapshots. Installer now owns
+    // signing and guest installation in one surface, so this is no longer a
+    // launcher icon.
     case ipaSigner
     case installer
     case liveContainer
     case liveContainerSettings
 
     static var allCases: [SystemAppKind] {
-        [.helloWorld, .settings, .ipaSigner, .installer, .liveContainer]
+        [.helloWorld, .settings, .installer, .liveContainer]
     }
 
     init(from decoder: Decoder) throws {
@@ -349,6 +352,7 @@ final class WorkspaceStore: ObservableObject {
         apps = []
         folders = []
         settings = WorkspaceSettings()
+        ensureWorkspaceFileFolders()
         load()
     }
 
@@ -378,6 +382,95 @@ final class WorkspaceStore: ObservableObject {
               let fileName = settings.customWallpaperFileName else { return nil }
         let url = wallpapersDirectory.appendingPathComponent(fileName, isDirectory: false)
         return fileManager.fileExists(atPath: url.path) ? url : nil
+    }
+
+    /// Files visible in the app's Documents directory. Users can copy IPAs,
+    /// certificates, and provisioning profiles here from Files, then select
+    /// them without reopening the provider picker.
+    var workspaceFilesDirectory: URL {
+        fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Workspace Files", isDirectory: true)
+    }
+
+    private var workspaceFileFolders: [String] {
+        ["Incoming", "IPAs", "Certificates", "Provisioning Profiles", "Downloads", "Signed"]
+    }
+
+    func workspaceFolderDirectory(named name: String) -> URL {
+        workspaceFilesDirectory.appendingPathComponent(name, isDirectory: true)
+    }
+
+    private func ensureWorkspaceFileFolders() {
+        try? fileManager.createDirectory(at: workspaceFilesDirectory, withIntermediateDirectories: true)
+        for folder in workspaceFileFolders {
+            try? fileManager.createDirectory(at: workspaceFolderDirectory(named: folder), withIntermediateDirectories: true)
+        }
+    }
+
+    func workspaceFiles() -> [URL] {
+        guard fileManager.fileExists(atPath: workspaceFilesDirectory.path) else { return [] }
+        let keys: Set<URLResourceKey> = [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey]
+        let enumerator = fileManager.enumerator(
+            at: workspaceFilesDirectory,
+            includingPropertiesForKeys: Array(keys),
+            options: [.skipsHiddenFiles]
+        )
+        return (enumerator?.compactMap { item -> URL? in
+            guard let url = item as? URL,
+                  (try? url.resourceValues(forKeys: keys).isDirectory) != true else { return nil }
+            return url
+        } ?? []).sorted { $0.path.localizedCaseInsensitiveCompare($1.path) == .orderedAscending }
+    }
+
+    @discardableResult
+    func copyToWorkspaceFiles(from sourceURL: URL) -> URL? {
+        let hasAccess = sourceURL.startAccessingSecurityScopedResource()
+        defer { if hasAccess { sourceURL.stopAccessingSecurityScopedResource() } }
+        do {
+            try fileManager.createDirectory(at: workspaceFilesDirectory, withIntermediateDirectories: true)
+            let baseName = sourceURL.lastPathComponent.isEmpty ? "Imported file" : sourceURL.lastPathComponent
+            let ext = sourceURL.pathExtension.lowercased()
+            let folder: String
+            switch ext {
+            case "ipa", "tipa", "zip": folder = "IPAs"
+            case "p12", "pfx": folder = "Certificates"
+            case "mobileprovision", "provisionprofile": folder = "Provisioning Profiles"
+            default: folder = "Incoming"
+            }
+            let destinationFolder = workspaceFolderDirectory(named: folder)
+            try fileManager.createDirectory(at: destinationFolder, withIntermediateDirectories: true)
+            var destination = destinationFolder.appendingPathComponent(baseName, isDirectory: false)
+            if fileManager.fileExists(atPath: destination.path) {
+                destination = destinationFolder.appendingPathComponent(
+                    "\(destination.deletingPathExtension().lastPathComponent)-\(UUID().uuidString.prefix(6)).\(destination.pathExtension)",
+                    isDirectory: false
+                )
+            }
+            try fileManager.copyItem(at: sourceURL, to: destination)
+            objectWillChange.send()
+            return destination
+        } catch {
+            importError = "Could not copy \(sourceURL.lastPathComponent): \(error.localizedDescription)"
+            return nil
+        }
+    }
+
+    func deleteWorkspaceFile(_ url: URL) {
+        let rootPath = workspaceFilesDirectory.standardizedFileURL.path
+        let filePath = url.standardizedFileURL.path
+        guard filePath.hasPrefix(rootPath + "/") else { return }
+        do {
+            try fileManager.removeItem(at: url)
+            objectWillChange.send()
+        } catch {
+            importError = "Could not delete \(url.lastPathComponent): \(error.localizedDescription)"
+        }
+    }
+
+    /// Refreshes views that display the app-owned Documents folder after a
+    /// background download writes a new file there.
+    func workspaceFilesDidChange() {
+        objectWillChange.send()
     }
 
     func apps(in folder: VirtualFolder) -> [VirtualApp] {
@@ -414,6 +507,12 @@ final class WorkspaceStore: ObservableObject {
                 destination = importsDirectory.appendingPathComponent("\(stem)-\(UUID().uuidString.prefix(6)).ipa")
             }
             try fileManager.copyItem(at: url, to: destination)
+#if LIVE_CONTAINER_NATIVE
+            // The native target uses the actual LiveContainer app store. Keep
+            // the copied package in Workspace storage while the asynchronous
+            // installer consumes an app-owned URL.
+            NativeWorkspaceInstaller.shared.install(url: destination)
+#else
             let name = destination.deletingPathExtension().lastPathComponent
                 .replacingOccurrences(of: "_", with: " ")
                 .replacingOccurrences(of: "-", with: " ")
@@ -435,6 +534,7 @@ final class WorkspaceStore: ObservableObject {
                 systemApp: nil
             ))
             save()
+#endif
         } catch {
             importError = "Could not import \(url.lastPathComponent): \(error.localizedDescription)"
         }
@@ -683,7 +783,7 @@ final class WorkspaceStore: ObservableObject {
         let retiredID = UUID(uuidString: "A7A82D56-1F2C-4B27-9FA9-000000000006")!
         let oldCount = apps.count
         apps.removeAll {
-            $0.id == retiredID || $0.systemApp == .liveContainerSettings
+            $0.id == retiredID || $0.systemApp == .liveContainerSettings || $0.systemApp == .ipaSigner
         }
         if apps.count != oldCount { save() }
     }

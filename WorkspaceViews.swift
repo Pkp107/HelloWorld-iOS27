@@ -9,7 +9,455 @@ struct InstallerView: View {
     let onOpen: (VirtualApp) -> Void
 
     var body: some View {
-        AppLibraryView(store: store, onOpen: onOpen)
+        CombinedInstallerView(store: store, onOpen: onOpen)
+    }
+}
+
+private struct CombinedInstallerView: View {
+    @ObservedObject var store: WorkspaceStore
+    let onOpen: (VirtualApp) -> Void
+    @State private var tab = InstallerTab.files
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                Picker("Installer section", selection: $tab) {
+                    ForEach(InstallerTab.allCases) { tab in
+                        Text(tab.label).tag(tab)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+
+                switch tab {
+                case .files:
+                    InstallerFilesView(store: store, onOpen: onOpen)
+                case .store:
+                    InstallerStoreView(store: store)
+                case .signing:
+#if LIVE_CONTAINER_NATIVE
+                    NativeIPASignerView()
+#else
+                    IPASignerView(store: store)
+#endif
+                }
+            }
+            .navigationTitle("Installer")
+        }
+    }
+}
+
+private enum InstallerTab: String, CaseIterable, Identifiable {
+    case files
+    case store
+    case signing
+
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .files: return "Files"
+        case .store: return "Store"
+        case .signing: return "Signing"
+        }
+    }
+}
+
+private struct InstallerFilesView: View {
+    @ObservedObject var store: WorkspaceStore
+    let onOpen: (VirtualApp) -> Void
+    @State private var showingImporter = false
+    @StateObject private var assetStore = SigningAssetStore()
+#if LIVE_CONTAINER_NATIVE
+    @ObservedObject private var nativeInstaller = NativeWorkspaceInstaller.shared
+#endif
+
+    private var files: [URL] { store.workspaceFiles() }
+
+    var body: some View {
+        List {
+            Section {
+                Button {
+                    showingImporter = true
+                } label: {
+                    Label("Copy from Files", systemImage: "square.and.arrow.down")
+                }
+                Text("Place IPAs, certificates, and provisioning profiles in Workspace Files. Select them here for installation or signing.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+#if LIVE_CONTAINER_NATIVE
+                if nativeInstaller.isInstalling {
+                    ProgressView("Installing in LiveContainer", value: nativeInstaller.progress, total: 1)
+                }
+                if let message = nativeInstaller.errorMessage {
+                    Text(message)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                }
+#endif
+            } header: {
+                Label("Workspace Files", systemImage: "folder.fill")
+            }
+
+            Section("Available files") {
+                if files.isEmpty {
+                    ContentUnavailableView("Folder is empty", systemImage: "folder", description: Text("Copy an IPA, .p12, or .mobileprovision from Files."))
+                } else {
+                    ForEach(files, id: \.path) { file in
+                        InstallerFileRow(file: file) {
+                            select(file)
+                        } onDelete: {
+                            store.deleteWorkspaceFile(file)
+                        }
+                    }
+                    .onDelete { offsets in
+                        offsets.compactMap { files.indices.contains($0) ? files[$0] : nil }
+                            .forEach(store.deleteWorkspaceFile)
+                    }
+                }
+            }
+
+            Section("Installed guests") {
+                NavigationLink {
+                    LiveContainerAppsView(store: store, onOpen: onOpen)
+                } label: {
+                    Label("LiveContainer apps", systemImage: "shippingbox.and.arrow.backward.fill")
+                }
+                Text("Apps installed through the native runtime appear in the LiveContainer menu entry and can also be launched from Home.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .listStyle(.insetGrouped)
+        .fileImporter(
+            isPresented: $showingImporter,
+            allowedContentTypes: [.item],
+            allowsMultipleSelection: true
+        ) { result in
+            switch result {
+            case .success(let urls):
+                urls.forEach { _ = store.copyToWorkspaceFiles(from: $0) }
+            case .failure(let error):
+                store.importError = error.localizedDescription
+            }
+        }
+        .alert("Installer", isPresented: Binding(
+            get: { store.importError != nil },
+            set: { if !$0 { store.importError = nil } }
+        )) {
+            Button("OK", role: .cancel) { store.importError = nil }
+        } message: {
+            Text(store.importError ?? "")
+        }
+    }
+
+    private func select(_ file: URL) {
+        switch file.pathExtension.lowercased() {
+        case "ipa", "zip":
+            store.installerImportIPA(from: file)
+        case "p12", "pfx":
+            if !assetStore.importAsset(from: file, kind: .certificate) {
+                store.importError = assetStore.errorMessage
+            }
+        case "mobileprovision", "provisionprofile":
+            if !assetStore.importAsset(from: file, kind: .provisioningProfile) {
+                store.importError = assetStore.errorMessage
+            }
+        default:
+            store.importError = "Select an IPA, certificate, or provisioning profile."
+        }
+    }
+}
+
+private struct InstallerFileRow: View {
+    let file: URL
+    let onSelect: () -> Void
+    let onDelete: () -> Void
+
+    private var kind: String {
+        switch file.pathExtension.lowercased() {
+        case "ipa", "zip": return "IPA"
+        case "p12", "pfx": return "Certificate"
+        case "mobileprovision", "provisionprofile": return "Provisioning profile"
+        default: return "File"
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.headline)
+                .foregroundStyle(.white)
+                .frame(width: 40, height: 40)
+                .background(Color.orange, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            VStack(alignment: .leading, spacing: 3) {
+                Text(file.lastPathComponent)
+                    .font(.body.weight(.semibold))
+                    .lineLimit(1)
+                Text(kind)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("Select", action: onSelect)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+        }
+        .contextMenu {
+            Button("Select", action: onSelect)
+            Button("Delete", role: .destructive, action: onDelete)
+        }
+    }
+
+    private var icon: String {
+        switch kind {
+        case "IPA": return "shippingbox.fill"
+        case "Certificate": return "key.fill"
+        case "Provisioning profile": return "doc.badge.gearshape"
+        default: return "doc.fill"
+        }
+    }
+}
+
+private struct CatalogSource: Identifiable {
+    let id: String
+    let url: URL
+    var name: String
+    var apps: [CatalogApp]
+    var status: String
+}
+
+private struct CatalogApp: Identifiable {
+    let id: String
+    let sourceID: String
+    let name: String
+    let developer: String
+    let category: String
+    let version: String
+    let downloadURL: URL
+}
+
+@MainActor
+private final class InstallerCatalog: ObservableObject {
+    @Published private(set) var sources: [CatalogSource] = []
+    @Published private(set) var apps: [CatalogApp] = []
+    @Published private(set) var loadingSourceIDs: Set<String> = []
+    @Published private(set) var downloadingIDs: Set<String> = []
+
+    private let sourceKey = "workspace.installer.catalogSources"
+    private let defaults: [URL] = [
+        URL(string: "https://github.com/LiveContainer/LiveContainer/releases/download/1.0/apps.json")!,
+        URL(string: "https://sidestore.io/apps-v2.json/")!,
+        URL(string: "https://raw.githubusercontent.com/Nyasami/Ksign/main/repo.json")!
+    ]
+
+    func seedAndRefresh() async {
+        if sources.isEmpty {
+            let saved = UserDefaults.standard.stringArray(forKey: sourceKey) ?? []
+            let urls = (saved.compactMap(URL.init(string:)) + defaults)
+                .reduce(into: [String: URL]()) { result, url in result[url.absoluteString] = url }
+                .values
+            sources = urls.map { CatalogSource(id: $0.absoluteString, url: $0, name: $0.host ?? "Repository", apps: [], status: "Not refreshed") }
+        }
+        for source in sources {
+            await refreshAsync(source)
+        }
+    }
+
+    func addSource(_ rawValue: String) {
+        guard let url = URL(string: rawValue.trimmingCharacters(in: .whitespacesAndNewlines)),
+              let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http",
+              url.host != nil, !sources.contains(where: { $0.url.absoluteString == url.absoluteString }) else { return }
+        sources.append(CatalogSource(id: url.absoluteString, url: url, name: url.host ?? "Repository", apps: [], status: "Not refreshed"))
+        persistSources()
+        refresh(source: sources.last!)
+    }
+
+    func remove(at offsets: IndexSet) {
+        sources.remove(atOffsets: offsets)
+        rebuildApps()
+        persistSources()
+    }
+
+    func refresh(_ source: CatalogSource) {
+        Task { await refreshAsync(source) }
+    }
+
+    func download(_ app: CatalogApp, store: WorkspaceStore) {
+        guard !downloadingIDs.contains(app.id) else { return }
+        downloadingIDs.insert(app.id)
+        Task {
+            defer { downloadingIDs.remove(app.id) }
+            do {
+                let (data, response) = try await URLSession.shared.data(from: app.downloadURL)
+                guard (response as? HTTPURLResponse)?.statusCode ?? 0 >= 200,
+                      (response as? HTTPURLResponse)?.statusCode ?? 0 < 300,
+                      !data.isEmpty else { throw CatalogError.invalidDownload }
+                let downloadsDirectory = store.workspaceFolderDirectory(named: "Downloads")
+                try FileManager.default.createDirectory(at: downloadsDirectory, withIntermediateDirectories: true)
+                let safeName = app.name.replacingOccurrences(of: "/", with: "-") + "-\(app.version).ipa"
+                let destination = downloadsDirectory.appendingPathComponent(safeName, isDirectory: false)
+                try data.write(to: destination, options: [.atomic])
+                store.workspaceFilesDidChange()
+                store.installerImportIPA(from: destination)
+            } catch {
+                store.importError = "Could not download \(app.name): \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func refreshAsync(_ source: CatalogSource) async {
+        guard !loadingSourceIDs.contains(source.id) else { return }
+        loadingSourceIDs.insert(source.id)
+        defer { loadingSourceIDs.remove(source.id) }
+        do {
+            let (data, response) = try await URLSession.shared.data(from: source.url)
+            guard (response as? HTTPURLResponse)?.statusCode ?? 0 >= 200,
+                  (response as? HTTPURLResponse)?.statusCode ?? 0 < 300,
+                  data.count <= 10_000_000 else { throw CatalogError.invalidResponse }
+            let parsed = try parse(data: data, sourceURL: source.url)
+            guard let index = sources.firstIndex(where: { $0.id == source.id }) else { return }
+            sources[index].name = parsed.name
+            sources[index].apps = parsed.apps
+            sources[index].status = "Updated"
+            rebuildApps()
+        } catch {
+            if let index = sources.firstIndex(where: { $0.id == source.id }) {
+                sources[index].status = "Unavailable"
+            }
+        }
+    }
+
+    private func rebuildApps() {
+        var seen = Set<String>()
+        apps = sources.flatMap(\.apps).filter { seen.insert($0.id).inserted }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    private func persistSources() {
+        UserDefaults.standard.set(sources.map { $0.url.absoluteString }, forKey: sourceKey)
+    }
+
+    private func parse(data: Data, sourceURL: URL) throws -> (name: String, apps: [CatalogApp]) {
+        guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let rawApps = root["apps"] as? [[String: Any]] else { throw CatalogError.invalidResponse }
+        let sourceID = (root["identifier"] as? String) ?? (root["id"] as? String) ?? sourceURL.absoluteString
+        let name = (root["name"] as? String) ?? sourceURL.host ?? "Repository"
+        let apps = rawApps.compactMap { raw -> CatalogApp? in
+            let bundleID = (raw["bundleIdentifier"] as? String) ?? (raw["id"] as? String)
+            let appName = raw["name"] as? String
+            guard let bundleID, let appName else { return nil }
+            let developer = (raw["developerName"] as? String) ?? (raw["developer"] as? String) ?? "Unknown developer"
+            let category = (raw["category"] as? String) ?? "Utilities"
+            let versions = raw["versions"] as? [[String: Any]] ?? []
+            let version = versions.first ?? raw
+            guard let downloadString = (version["downloadURL"] as? String) ?? (raw["downloadURL"] as? String),
+                  let parsedDownloadURL = URL(string: downloadString, relativeTo: sourceURL) else { return nil }
+            let downloadURL = parsedDownloadURL.absoluteURL
+            guard let scheme = downloadURL.scheme?.lowercased(), scheme == "http" || scheme == "https" else { return nil }
+            let versionName = (version["version"] as? String) ?? (raw["version"] as? String) ?? "Latest"
+            return CatalogApp(id: "\(sourceID)|\(bundleID)|\(versionName)", sourceID: sourceID, name: appName, developer: developer, category: category, version: versionName, downloadURL: downloadURL)
+        }
+        return (name, apps)
+    }
+}
+
+private enum CatalogError: LocalizedError {
+    case invalidResponse
+    case invalidDownload
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidResponse: return "The repository did not return a supported AltStore source."
+        case .invalidDownload: return "The repository returned an invalid IPA download."
+        }
+    }
+}
+
+private struct InstallerStoreView: View {
+    @ObservedObject var store: WorkspaceStore
+    @StateObject private var catalog = InstallerCatalog()
+    @State private var showingAddSource = false
+    @State private var sourceURL = ""
+
+    var body: some View {
+        List {
+            Section {
+                ForEach(catalog.sources) { source in
+                    HStack {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(source.name).font(.body.weight(.semibold))
+                            Text("\(source.apps.count) apps · \(source.status)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button {
+                            catalog.refresh(source)
+                        } label: {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                        .disabled(catalog.loadingSourceIDs.contains(source.id))
+                    }
+                }
+                .onDelete { offsets in catalog.remove(at: offsets) }
+            } header: {
+                HStack {
+                    Text("Repositories")
+                    Spacer()
+                    Button {
+                        showingAddSource = true
+                    } label: {
+                        Image(systemName: "plus")
+                    }
+                    .accessibilityLabel("Add repository")
+                }
+            }
+
+            Section("Apps") {
+                if catalog.apps.isEmpty {
+                    ContentUnavailableView("No catalog apps", systemImage: "shippingbox", description: Text("Refresh a repository or add an AltStore-compatible source."))
+                } else {
+                    ForEach(catalog.apps) { app in
+                        HStack(spacing: 12) {
+                            Image(systemName: "app.fill")
+                                .foregroundStyle(.white)
+                                .frame(width: 40, height: 40)
+                                .background(.blue, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(app.name).font(.body.weight(.semibold))
+                                Text("\(app.developer) · \(app.category)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button(catalog.downloadingIDs.contains(app.id) ? "..." : "Get") {
+                                catalog.download(app, store: store)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                            .disabled(catalog.downloadingIDs.contains(app.id))
+                        }
+                    }
+                }
+            }
+        }
+        .listStyle(.insetGrouped)
+        .task {
+            await catalog.seedAndRefresh()
+        }
+        .alert("Add repository", isPresented: $showingAddSource) {
+            TextField("https://example.com/apps.json", text: $sourceURL)
+                .textInputAutocapitalization(.never)
+                .keyboardType(.URL)
+            Button("Add") {
+                catalog.addSource(sourceURL)
+                sourceURL = ""
+            }
+            Button("Cancel", role: .cancel) { sourceURL = "" }
+        } message: {
+            Text("Use an AltStore, SideStore, eSign, or KSign-compatible JSON feed.")
+        }
     }
 }
 
@@ -138,11 +586,6 @@ struct AppLibraryView: View {
                         Label("Installed apps", systemImage: "square.stack.3d.up.fill")
                     }
 
-                    NavigationLink {
-                        IPASignerView(store: store)
-                    } label: {
-                        Label("IPA Signer", systemImage: "signature")
-                    }
                 }
 
                 if !store.folders.isEmpty {
@@ -774,7 +1217,7 @@ struct SigningAndJITSettingsView: View {
                     importer: $showingProfileImporter,
                     placeholder: "Choose .mobileprovision"
                 )
-                Text("These files are shared with IPA Signer. They stay in protected Workspace storage.")
+                Text("These files are shared with Installer. They stay in protected Workspace storage.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 Text("You can also use Files > Share > Workspace for both signing files.")
@@ -1100,7 +1543,7 @@ struct IPASignerView: View {
                     Text("The lightweight target validates and stores the signing package. Use the integrated Workspace artifact to sign and export it.")
                 }
             }
-            .navigationTitle("IPA Signer")
+            .navigationTitle("Signing")
         }
         .onAppear {
             if certificatePassword.isEmpty {
@@ -1132,7 +1575,7 @@ struct IPASignerView: View {
                 assetStore.errorMessage = error.localizedDescription
             }
         }
-        .alert("IPA Signer", isPresented: Binding(
+        .alert("Signing", isPresented: Binding(
             get: { statusMessage != nil },
             set: { if !$0 { statusMessage = nil } }
         )) {
