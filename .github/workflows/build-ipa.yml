@@ -90,7 +90,6 @@ jobs:
           set -euo pipefail
           app_path="$RUNNER_TEMP/DerivedData/Build/Products/Debug-iphonesimulator/HelloWorld.app"
           xcrun simctl boot "$SIM_UDID" || true
-          open -a Simulator --args -CurrentDeviceUDID "$SIM_UDID"
           xcrun simctl bootstatus "$SIM_UDID" -b
           xcrun simctl install "$SIM_UDID" "$app_path"
           xcrun simctl launch "$SIM_UDID" com.example.helloworld
