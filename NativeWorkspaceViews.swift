@@ -1,7 +1,6 @@
 #if LIVE_CONTAINER_NATIVE
 import SwiftUI
 import UIKit
-import Darwin
 
 struct NativeLiveContainerAppLibraryView: View {
     @StateObject private var downloadHelper = DownloadHelper()
@@ -382,16 +381,12 @@ final class NativeIPASigningEngine: ObservableObject {
         }
 
         try provisioningProfile.write(to: appURL.appendingPathComponent("embedded.mobileprovision"), options: [.atomic])
-        guard dlopen("@executable_path/Frameworks/ZSign.dylib", RTLD_NOW) != nil else {
-            throw NativeIPASigningError.signerUnavailable
-        }
-
         try await withCheckedThrowingContinuation { continuation in
-            let progress = ZSigner.sign(
-                withAppPath: appURL.path,
-                bundleId: bundleIdentifier,
-                cert: certificate,
-                pass: certificatePassword
+            LCUtils.workspaceSignApp(
+                atPath: appURL.path,
+                bundleIdentifier: bundleIdentifier,
+                certificate: certificate,
+                password: certificatePassword
             ) { success, error in
                 if success {
                     continuation.resume()
@@ -399,15 +394,12 @@ final class NativeIPASigningEngine: ObservableObject {
                     continuation.resume(throwing: error ?? NativeIPASigningError.signerFailed)
                 }
             }
-            if progress == nil {
-                continuation.resume(throwing: NativeIPASigningError.signerUnavailable)
-            }
         }
 
         try fileManager.createDirectory(at: outputRoot, withIntermediateDirectories: true)
         let outputPayload = outputRoot.appendingPathComponent("Payload", isDirectory: true)
         try fileManager.copyItem(at: payloadRoot, to: outputPayload)
-        guard let archiveData = PKZipArchiver().zippedData(for: outputPayload.deletingLastPathComponent()) else {
+        guard let archiveData = LCUtils.workspaceZipDirectory(at: outputPayload.deletingLastPathComponent()) else {
             throw NativeIPASigningError.archiveFailed
         }
 
