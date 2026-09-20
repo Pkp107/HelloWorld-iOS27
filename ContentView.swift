@@ -8,9 +8,17 @@ struct ContentView: View {
     @State private var showingOnboarding = false
 
     private var launcherApps: [VirtualApp] {
-        // Imported guests live under the LiveContainer entry. Keep the launcher
-        // itself limited to system surfaces and folders so it remains scannable.
+        // Workspace-owned tools always stay on the launcher. The native build
+        // appends LiveContainer's installed guest apps below this grid.
         store.homeApps.filter { $0.isBuiltIn || $0.systemApp != nil }
+    }
+
+    private var launcherItemCount: Int {
+#if LIVE_CONTAINER_NATIVE
+        launcherApps.count + store.folders.count + DataManager.shared.model.apps.count
+#else
+        launcherApps.count + store.folders.count
+#endif
     }
 
     var body: some View {
@@ -21,18 +29,26 @@ struct ContentView: View {
                     imageURL: store.wallpaperURL
                 )
 
-                // This is deliberately a fixed launcher surface. Guest apps are
-                // opened from LiveContainer and never make the home grid taller.
+                // The launcher itself does not scroll. Native guest apps are
+                // rendered in the same fixed home surface as Workspace tools.
                 VStack(alignment: .leading, spacing: 18) {
-                    HomeHeader(itemCount: launcherApps.count + store.folders.count)
-                    HomeGrid(
-                        apps: launcherApps,
-                        folders: store.folders,
-                        columns: store.settings.gridColumns,
-                        showLabels: store.settings.showAppLabels,
-                        onOpenApp: open,
-                        onOpenFolder: { folder = $0 }
-                    )
+                    HomeHeader(itemCount: launcherItemCount)
+                    Group {
+                        HomeGrid(
+                            apps: launcherApps,
+                            folders: store.folders,
+                            columns: store.settings.gridColumns,
+                            showLabels: store.settings.showAppLabels,
+                            onOpenApp: open,
+                            onOpenFolder: { folder = $0 }
+                        )
+#if LIVE_CONTAINER_NATIVE
+                        NativeLiveContainerHomeGrid(
+                            columns: store.settings.gridColumns,
+                            showLabels: store.settings.showAppLabels
+                        )
+#endif
+                    }
                     .frame(maxHeight: max(0, proxy.size.height - 164), alignment: .top)
                     .clipped()
                     Spacer(minLength: 0)
@@ -255,7 +271,9 @@ struct RuntimeWindow: View {
         case .liveContainer:
             LiveContainerAppsView(store: store, onOpen: onOpen)
         case .liveContainerSettings:
-            LiveContainerSettingsView(store: store)
+            // Kept only so an app record from an older workspace build can
+            // still open. New launchers expose these controls inside Settings.
+            SettingsView(store: store)
         case .settings:
             SettingsView(store: store)
         case nil:
@@ -436,12 +454,14 @@ private struct OnboardingJITPage: View {
     @StateObject private var assetStore = SigningAssetStore()
     @State private var showingCertificateImporter = false
     @State private var showingProfileImporter = false
+    @State private var certificatePassword = ""
+    @State private var certificateStatus: String?
 
     var body: some View {
         OnboardingPageLayout(
             symbol: "bolt.fill",
             title: "Set up JIT when you need it",
-            message: "Choose the path you normally use for emulators and other apps that need Just-In-Time compilation. This can be changed in LiveContainer settings."
+            message: "Choose the path you normally use for emulators and other apps that need Just-In-Time compilation. You can change it later in Settings."
         ) {
             Picker("JIT method", selection: $store.settings.jitProvider) {
                 ForEach(JITProvider.allCases, id: \.self) { provider in
@@ -471,25 +491,49 @@ private struct OnboardingJITPage: View {
                             systemImage: "doc.badge.gearshape"
                         )
                     }
+                    if assetStore.asset(for: .certificate) != nil {
+                        SecureField("Certificate password", text: $certificatePassword)
+                            .textContentType(.password)
+                        #if LIVE_CONTAINER_NATIVE
+                        Button("Use certificate for LiveContainer JIT") {
+                            configureLiveContainerJIT()
+                        }
+                        .disabled(certificatePassword.isEmpty)
+                        #endif
+                    }
+                    Text("These signing files are saved once and reused by IPA Signer. The certificate can also configure LiveContainer JIT.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    if let certificateStatus {
+                        Text(certificateStatus)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    } else if let errorMessage = assetStore.errorMessage {
+                        Text(errorMessage)
+                            .font(.footnote)
+                            .foregroundStyle(.red)
+                    }
                 }
             } else if store.settings.jitProvider == .jitStreamer {
-                Text("JIT Streamer can be configured later from LiveContainer Settings.")
+                Text("JIT Streamer can be configured later from Settings.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
         }
         .fileImporter(
             isPresented: $showingCertificateImporter,
-            allowedContentTypes: [.data],
+            allowedContentTypes: SigningAssetKind.certificate.fileImporterContentTypes,
             allowsMultipleSelection: false
         ) { result in
             if case .success(let urls) = result, let url = urls.first {
-                assetStore.importAsset(from: url, kind: .certificate)
+                if assetStore.importAsset(from: url, kind: .certificate), !certificatePassword.isEmpty {
+                    configureLiveContainerJIT()
+                }
             }
         }
         .fileImporter(
             isPresented: $showingProfileImporter,
-            allowedContentTypes: [.data],
+            allowedContentTypes: SigningAssetKind.provisioningProfile.fileImporterContentTypes,
             allowsMultipleSelection: false
         ) { result in
             if case .success(let urls) = result, let url = urls.first {
@@ -503,6 +547,20 @@ private struct OnboardingJITPage: View {
             .replacingOccurrences(of: "([a-z])([A-Z])", with: "$1 $2", options: .regularExpression)
             .capitalized
     }
+
+    private func configureLiveContainerJIT() {
+        #if LIVE_CONTAINER_NATIVE
+        do {
+            try NativeSigningConfiguration.configureLiveContainerJIT(
+                with: assetStore,
+                certificatePassword: certificatePassword
+            )
+            certificateStatus = "Certificate saved for LiveContainer JIT."
+        } catch {
+            certificateStatus = error.localizedDescription
+        }
+        #endif
+    }
 }
 
 private struct OnboardingReadyPage: View {
@@ -510,7 +568,7 @@ private struct OnboardingReadyPage: View {
         OnboardingPageLayout(
             symbol: "checkmark.circle.fill",
             title: "You are ready",
-            message: "Use Installer to add repositories or import an IPA, then open LiveContainer to launch installed guest apps."
+            message: "Use Installer to add repositories or import an IPA. LiveContainer-installed apps will appear on your home screen."
         )
     }
 }

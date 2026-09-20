@@ -1,6 +1,6 @@
 # Workspace for iOS 27
 
-Workspace is a SwiftUI launcher compiled with the iOS 27 SDK. It includes a fixed, non-scrolling home surface, wallpaper selection, folders, a first-run setup flow, Installer, Installed Apps, Settings, LiveContainer Settings, IPA Signer, and the built-in Hello World app. Apps open as full-screen surfaces with an edge home bar: on the right in portrait and on the left in landscape. The bar can be tapped or swiped.
+Workspace is a SwiftUI launcher compiled with the iOS 27 SDK. It includes a fixed, non-scrolling home surface, wallpaper selection, folders, a first-run setup flow, Installer, Installed Apps, Settings, IPA Signer, and the built-in Hello World app. LiveContainer runtime controls live inside Settings, while LiveContainer-installed apps appear on the Workspace home screen. Apps open as full-screen surfaces with an edge home bar: on the right in portrait and on the left in landscape. The bar can be tapped or swiped.
 
 ## Build the IPA with GitHub Actions
 
@@ -16,7 +16,7 @@ The workflow creates an **unsigned** IPA. GitHub Actions only builds the package
 
 The integrated artifact is assembled from pinned upstream LiveContainer sources, including the native bootstrap, shared framework, process and launch extensions, loader, ZSign, and required submodules. Its Installer and Installed Apps entries use the upstream importer and guest-app list. The fallback target keeps the same UI contracts and stores imported IPAs locally, but cannot execute guest processes on its own.
 
-The IPA Signer app copies the selected certificate and provisioning profile into protected, app-owned storage. In the integrated build, LiveContainer's native signer requests the private-key password when needed; passwords are never persisted. A compatible developer certificate and provisioning profile are still required for the host IPA and for guest-app signing.
+The IPA Signer app has its own IPA picker and copies the selected certificate and provisioning profile into protected, app-owned storage. Those signing assets can be imported during setup and are also reused for certificate-based JIT. A compatible certificate and provisioning profile are still required for signing.
 
 Installer accepts local IPAs and stores custom HTTP/HTTPS repository URLs for AltStore, SideStore, eSign, or KSign-compatible feeds. The source detail screen opens a feed in Safari or Files; the native LiveContainer importer performs the actual guest installation in the integrated artifact.
 

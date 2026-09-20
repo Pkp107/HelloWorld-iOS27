@@ -15,7 +15,7 @@ enum SystemAppKind: String, Codable, CaseIterable, Hashable {
     case liveContainerSettings
 
     static var allCases: [SystemAppKind] {
-        [.helloWorld, .settings, .ipaSigner, .installer, .liveContainer, .liveContainerSettings]
+        [.helloWorld, .settings, .ipaSigner, .installer, .liveContainer]
     }
 
     init(from decoder: Decoder) throws {
@@ -342,8 +342,7 @@ final class WorkspaceStore: ObservableObject {
         .installer: UUID(uuidString: "A7A82D56-1F2C-4B27-9FA9-000000000005")!,
         // Reuse the old App Library identifier so migration maps that app in
         // place instead of adding a duplicate LiveContainer icon.
-        .liveContainer: UUID(uuidString: "A7A82D56-1F2C-4B27-9FA9-000000000002")!,
-        .liveContainerSettings: UUID(uuidString: "A7A82D56-1F2C-4B27-9FA9-000000000006")!
+        .liveContainer: UUID(uuidString: "A7A82D56-1F2C-4B27-9FA9-000000000002")!
     ]
 
     init() {
@@ -631,6 +630,7 @@ final class WorkspaceStore: ObservableObject {
             apps = snapshot.apps
             folders = snapshot.folders
             settings = snapshot.settings
+            removeRetiredSystemApps()
             ensureSystemApps()
         } catch {
             apps = Self.seedSystemApps(ids: builtInIDs)
@@ -674,6 +674,18 @@ final class WorkspaceStore: ObservableObject {
             }
         }
         if changed { save() }
+    }
+
+    /// LiveContainer controls now live inside Settings. Remove the old
+    /// standalone launcher icon when loading a workspace created by an
+    /// earlier build.
+    private func removeRetiredSystemApps() {
+        let retiredID = UUID(uuidString: "A7A82D56-1F2C-4B27-9FA9-000000000006")!
+        let oldCount = apps.count
+        apps.removeAll {
+            $0.id == retiredID || $0.systemApp == .liveContainerSettings
+        }
+        if apps.count != oldCount { save() }
     }
 
     private func save() {

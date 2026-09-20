@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import UniformTypeIdentifiers
 
 /// The two inputs the future ZSign adapter will need. The store keeps the
 /// bytes inside the app container so a security-scoped importer URL is never
@@ -27,11 +28,37 @@ enum SigningAssetKind: String, Codable, CaseIterable, Identifiable {
             return ["mobileprovision", "provisionprofile"]
         }
     }
+
+    /// Explicit document types keep the Files picker from treating signing
+    /// inputs as an unknown generic data file. Some providers only enable the
+    /// row when they receive the extension-backed type.
+    var fileImporterContentTypes: [UTType] {
+        switch self {
+        case .certificate:
+            return [
+                UTType(filenameExtension: "p12") ?? .data,
+                UTType(filenameExtension: "pfx") ?? .data
+            ]
+        case .provisioningProfile:
+            return [
+                UTType(filenameExtension: "mobileprovision") ?? .data,
+                UTType(filenameExtension: "provisionprofile") ?? .data
+            ]
+        }
+    }
 }
 
 struct SigningAsset: Codable, Equatable, Identifiable {
     let id: UUID
     let kind: SigningAssetKind
+    let originalName: String
+    let storedName: String
+    let byteCount: Int64
+    let importedAt: Date
+}
+
+struct SigningPackage: Codable, Equatable, Identifiable {
+    let id: UUID
     let originalName: String
     let storedName: String
     let byteCount: Int64
@@ -62,7 +89,15 @@ final class SigningAssetStore: ObservableObject {
         return fileManager.fileExists(atPath: url.path) ? url : nil
     }
 
-    func importAsset(from sourceURL: URL, kind: SigningAssetKind) {
+    func data(for kind: SigningAssetKind) -> Data? {
+        guard let asset = asset(for: kind), let assetURL = url(for: asset) else {
+            return nil
+        }
+        return try? Data(contentsOf: assetURL, options: [.mappedIfSafe])
+    }
+
+    @discardableResult
+    func importAsset(from sourceURL: URL, kind: SigningAssetKind) -> Bool {
         errorMessage = nil
         let hasAccess = sourceURL.startAccessingSecurityScopedResource()
         defer {
@@ -111,8 +146,10 @@ final class SigningAssetStore: ObservableObject {
             assets.append(imported)
             try save()
             errorMessage = nil
+            return true
         } catch {
             errorMessage = error.localizedDescription
+            return false
         }
     }
 
@@ -163,6 +200,103 @@ final class SigningAssetStore: ObservableObject {
     }
 }
 
+/// IPA Signer owns this package store. It deliberately does not share the
+/// Installer or LiveContainer import directory, so a package can be signed
+/// without adding it to Workspace's runtime.
+@MainActor
+final class SigningPackageStore: ObservableObject {
+    @Published private(set) var package: SigningPackage?
+    @Published var errorMessage: String?
+
+    private let fileManager: FileManager
+    private let encoder = JSONEncoder()
+    private let decoder = JSONDecoder()
+
+    init(fileManager: FileManager = .default) {
+        self.fileManager = fileManager
+        load()
+    }
+
+    var packageURL: URL? {
+        guard let package else { return nil }
+        let url = packagesDirectory.appendingPathComponent(package.storedName, isDirectory: false)
+        return fileManager.fileExists(atPath: url.path) ? url : nil
+    }
+
+    @discardableResult
+    func importPackage(from sourceURL: URL) -> Bool {
+        errorMessage = nil
+        let hasAccess = sourceURL.startAccessingSecurityScopedResource()
+        defer {
+            if hasAccess { sourceURL.stopAccessingSecurityScopedResource() }
+        }
+
+        do {
+            let fileExtension = sourceURL.pathExtension.lowercased()
+            guard fileExtension == "ipa" || fileExtension == "zip" else {
+                throw SigningPackageError.unsupportedFile
+            }
+            let data = try Data(contentsOf: sourceURL, options: [.mappedIfSafe])
+            guard !data.isEmpty else { throw SigningPackageError.emptyFile }
+
+            try fileManager.createDirectory(at: packagesDirectory, withIntermediateDirectories: true)
+            if let oldURL = packageURL { try? fileManager.removeItem(at: oldURL) }
+
+            let storedName = UUID().uuidString + ".ipa"
+            let destination = packagesDirectory.appendingPathComponent(storedName, isDirectory: false)
+            try data.write(to: destination, options: [.atomic])
+            try fileManager.setAttributes(
+                [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
+                ofItemAtPath: destination.path
+            )
+            package = SigningPackage(
+                id: UUID(),
+                originalName: sourceURL.lastPathComponent,
+                storedName: storedName,
+                byteCount: Int64(data.count),
+                importedAt: .now
+            )
+            try save()
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func removePackage() {
+        if let packageURL { try? fileManager.removeItem(at: packageURL) }
+        package = nil
+        try? fileManager.removeItem(at: manifestURL)
+    }
+
+    private var applicationSupportDirectory: URL {
+        fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Workspace", isDirectory: true)
+    }
+
+    private var packagesDirectory: URL {
+        applicationSupportDirectory.appendingPathComponent("Signing/Packages", isDirectory: true)
+    }
+
+    private var manifestURL: URL {
+        packagesDirectory.appendingPathComponent("package.json", isDirectory: false)
+    }
+
+    private func load() {
+        guard let data = try? Data(contentsOf: manifestURL),
+              let stored = try? decoder.decode(SigningPackage.self, from: data) else { return }
+        let url = packagesDirectory.appendingPathComponent(stored.storedName, isDirectory: false)
+        package = fileManager.fileExists(atPath: url.path) ? stored : nil
+    }
+
+    private func save() throws {
+        try fileManager.createDirectory(at: packagesDirectory, withIntermediateDirectories: true)
+        guard let package else { return }
+        try encoder.encode(package).write(to: manifestURL, options: [.atomic])
+    }
+}
+
 private enum SigningAssetError: LocalizedError {
     case sourceMissing
     case emptyFile
@@ -176,6 +310,18 @@ private enum SigningAssetError: LocalizedError {
             return "The selected signing file is empty."
         case .unexpectedFileType(let kind):
             return "Choose a supported file for \(kind.label)."
+        }
+    }
+}
+
+private enum SigningPackageError: LocalizedError {
+    case unsupportedFile
+    case emptyFile
+
+    var errorDescription: String? {
+        switch self {
+        case .unsupportedFile: return "Choose an IPA file."
+        case .emptyFile: return "The selected IPA is empty."
         }
     }
 }

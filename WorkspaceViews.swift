@@ -690,6 +690,16 @@ struct SettingsView: View {
                     }
                 }
 
+                if matches("Signing", "certificate", "profile", "p12", "mobileprovision", "JIT") {
+                    Section("Signing and JIT") {
+                        NavigationLink {
+                            SigningAndJITSettingsView(store: store)
+                        } label: {
+                            Label("Certificates and JIT", systemImage: "key.viewfinder")
+                        }
+                    }
+                }
+
                 if matches("LiveContainer", "runtime", "JIT", "installed apps") {
                     Section("Runtime") {
                         NavigationLink {
@@ -719,7 +729,7 @@ struct SettingsView: View {
                     }
                 }
 
-                if !matches("Home", "grid", "labels", "motion", "Appearance", "wallpaper", "glass", "opacity", "LiveContainer", "runtime", "JIT", "installed apps", "Reset", "workspace", "advanced") {
+                if !matches("Home", "grid", "labels", "motion", "Appearance", "wallpaper", "glass", "opacity", "Signing", "certificate", "profile", "p12", "mobileprovision", "JIT", "LiveContainer", "runtime", "installed apps", "Reset", "workspace", "advanced") {
                     ContentUnavailableView("No matching settings", systemImage: "magnifyingglass", description: Text("Try a different search.") )
                 }
             }
@@ -738,6 +748,129 @@ struct SettingsView: View {
                 }
             }
         }
+    }
+}
+
+struct SigningAndJITSettingsView: View {
+    @ObservedObject var store: WorkspaceStore
+    @StateObject private var assetStore = SigningAssetStore()
+    @State private var showingCertificateImporter = false
+    @State private var showingProfileImporter = false
+    @State private var certificatePassword = ""
+    @State private var statusMessage: String?
+
+    var body: some View {
+        Form {
+            Section("Signing assets") {
+                signingAssetRow(
+                    kind: .certificate,
+                    asset: assetStore.asset(for: .certificate),
+                    importer: $showingCertificateImporter,
+                    placeholder: "Choose .p12 or .pfx"
+                )
+                signingAssetRow(
+                    kind: .provisioningProfile,
+                    asset: assetStore.asset(for: .provisioningProfile),
+                    importer: $showingProfileImporter,
+                    placeholder: "Choose .mobileprovision"
+                )
+                Text("These files are shared with IPA Signer. They stay in protected Workspace storage.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Certificate JIT") {
+                Picker("JIT provider", selection: Binding(
+                    get: { store.settings.jitProvider.rawValue },
+                    set: { store.settings.jitProvider = JITProvider(rawValue: $0) ?? store.settings.jitProvider }
+                )) {
+                    ForEach(JITProvider.allCases) { provider in
+                        Text(provider.label).tag(provider.rawValue)
+                    }
+                }
+                Toggle("Enable JIT", isOn: $store.settings.jitEnabled)
+                if store.settings.jitProvider == .certificate {
+                    SecureField("Certificate password", text: $certificatePassword)
+                        .textContentType(.password)
+#if LIVE_CONTAINER_NATIVE
+                    Button("Configure LiveContainer JIT") {
+                        configureLiveContainerJIT()
+                    }
+                    .disabled(assetStore.asset(for: .certificate) == nil || certificatePassword.isEmpty)
+#else
+                    Text("Certificate JIT is available in the integrated Workspace build.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+#endif
+                }
+                if let statusMessage {
+                    Text(statusMessage)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                } else if let errorMessage = assetStore.errorMessage {
+                    Text(errorMessage)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                }
+            }
+        }
+        .navigationTitle("Certificates and JIT")
+        .onChange(of: store.settings) { _, _ in store.settingsDidChange() }
+        .fileImporter(
+            isPresented: $showingCertificateImporter,
+            allowedContentTypes: SigningAssetKind.certificate.fileImporterContentTypes,
+            allowsMultipleSelection: false
+        ) { result in
+            if case .success(let urls) = result, let url = urls.first {
+                _ = assetStore.importAsset(from: url, kind: .certificate)
+            }
+        }
+        .fileImporter(
+            isPresented: $showingProfileImporter,
+            allowedContentTypes: SigningAssetKind.provisioningProfile.fileImporterContentTypes,
+            allowsMultipleSelection: false
+        ) { result in
+            if case .success(let urls) = result, let url = urls.first {
+                _ = assetStore.importAsset(from: url, kind: .provisioningProfile)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func signingAssetRow(
+        kind: SigningAssetKind,
+        asset: SigningAsset?,
+        importer: Binding<Bool>,
+        placeholder: String
+    ) -> some View {
+        HStack(spacing: 8) {
+            Button { importer.wrappedValue = true } label: {
+                LabeledContent(kind.label, value: asset?.originalName ?? placeholder)
+            }
+            .buttonStyle(.plain)
+            if let asset {
+                Button(role: .destructive) { assetStore.remove(asset) } label: {
+                    Image(systemName: "trash")
+                        .frame(width: 44, height: 44)
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("Remove \(kind.label)")
+            }
+        }
+    }
+
+    private func configureLiveContainerJIT() {
+#if LIVE_CONTAINER_NATIVE
+        do {
+            try NativeSigningConfiguration.configureLiveContainerJIT(
+                with: assetStore,
+                certificatePassword: certificatePassword
+            )
+            statusMessage = "Certificate configured for LiveContainer JIT."
+        } catch {
+            statusMessage = error.localizedDescription
+        }
+#endif
     }
 }
 
@@ -863,7 +996,7 @@ struct IPASignerView: View {
     @ObservedObject var store: WorkspaceStore
 
     var body: some View {
-        NativeLiveContainerSignerView()
+        NativeIPASignerView()
     }
 }
 #else
@@ -871,17 +1004,12 @@ struct IPASignerView: View {
 struct IPASignerView: View {
     @ObservedObject var store: WorkspaceStore
     @StateObject private var assetStore = SigningAssetStore()
-    @State private var selectedAppID: UUID?
+    @StateObject private var packageStore = SigningPackageStore()
+    @State private var showingPackageImporter = false
     @State private var showingCertificateImporter = false
     @State private var showingProfileImporter = false
-
-    private var importedApps: [VirtualApp] {
-        store.apps.filter { !$0.isBuiltIn }
-    }
-
-    private var selectedApp: VirtualApp? {
-        importedApps.first(where: { $0.id == selectedAppID })
-    }
+    @State private var certificatePassword = ""
+    @State private var statusMessage: String?
 
     private var certificateAsset: SigningAsset? {
         assetStore.asset(for: .certificate)
@@ -894,19 +1022,24 @@ struct IPASignerView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section {
-                    if importedApps.isEmpty {
-                        ContentUnavailableView("No IPA files", systemImage: "shippingbox", description: Text("Import an IPA from Installer first."))
-                    } else {
-                        Picker("IPA", selection: $selectedAppID) {
-                            Text("Choose an app").tag(UUID?.none)
-                            ForEach(importedApps) { app in
-                                Text(app.displayName).tag(Optional(app.id))
-                            }
+                Section("Package") {
+                    Button {
+                        showingPackageImporter = true
+                    } label: {
+                        LabeledContent(
+                            "IPA",
+                            value: packageStore.package?.originalName ?? "Choose an IPA from Files"
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    if packageStore.package != nil {
+                        Button("Remove selected IPA", role: .destructive) {
+                            packageStore.removePackage()
                         }
                     }
-                } header: {
-                    Text("Package")
+                    Text("This IPA is kept only for signing. It is not added to Workspace or LiveContainer.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
 
                 Section("Signing assets") {
@@ -922,6 +1055,8 @@ struct IPASignerView: View {
                         importer: $showingProfileImporter,
                         placeholder: "Choose .mobileprovision"
                     )
+                    SecureField("Certificate password", text: $certificatePassword)
+                        .textContentType(.password)
                     Text("Signing requires a certificate and profile that match the target device. Files are copied into this app's sandbox; private-key passwords are never stored.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -933,43 +1068,43 @@ struct IPASignerView: View {
                 }
 
                 Section {
-                    Button("Prepare signed IPA") {
-                        if let selectedApp {
-                            store.prepareSigning(
-                                for: selectedApp,
-                                certificateName: certificateAsset?.originalName ?? "",
-                                profileName: profileAsset?.originalName ?? ""
-                            )
-                        }
+                    Button("Prepare signing package") {
+                        statusMessage = "The IPA, certificate, and provisioning profile are ready. The integrated Workspace build can export the signed IPA."
                     }
                     .frame(minHeight: 44)
-                    .disabled(selectedApp == nil || certificateAsset == nil || profileAsset == nil)
+                    .disabled(packageStore.package == nil || certificateAsset == nil || profileAsset == nil || certificatePassword.isEmpty)
                 } footer: {
-                    Text("The current build exposes the signing workflow and validation surface. A native ZSign backend must be linked before it can export a signed IPA.")
+                    Text("The lightweight target validates and stores the signing package. Use the integrated Workspace artifact to sign and export it.")
                 }
             }
             .navigationTitle("IPA Signer")
         }
-        .onAppear {
-            if selectedAppID == nil { selectedAppID = importedApps.first?.id }
-        }
-        .fileImporter(isPresented: $showingCertificateImporter, allowedContentTypes: [.data], allowsMultipleSelection: false) { result in
+        .fileImporter(
+            isPresented: $showingPackageImporter,
+            allowedContentTypes: [UTType(filenameExtension: "ipa") ?? .zip, .zip],
+            allowsMultipleSelection: false
+        ) { result in
             if case .success(let urls) = result, let url = urls.first {
-                assetStore.importAsset(from: url, kind: .certificate)
+                _ = packageStore.importPackage(from: url)
             }
         }
-        .fileImporter(isPresented: $showingProfileImporter, allowedContentTypes: [.data], allowsMultipleSelection: false) { result in
+        .fileImporter(isPresented: $showingCertificateImporter, allowedContentTypes: SigningAssetKind.certificate.fileImporterContentTypes, allowsMultipleSelection: false) { result in
             if case .success(let urls) = result, let url = urls.first {
-                assetStore.importAsset(from: url, kind: .provisioningProfile)
+                _ = assetStore.importAsset(from: url, kind: .certificate)
             }
         }
-        .alert("Signing", isPresented: Binding(
-            get: { store.signingMessage != nil },
-            set: { if !$0 { store.signingMessage = nil } }
+        .fileImporter(isPresented: $showingProfileImporter, allowedContentTypes: SigningAssetKind.provisioningProfile.fileImporterContentTypes, allowsMultipleSelection: false) { result in
+            if case .success(let urls) = result, let url = urls.first {
+                _ = assetStore.importAsset(from: url, kind: .provisioningProfile)
+            }
+        }
+        .alert("IPA Signer", isPresented: Binding(
+            get: { statusMessage != nil },
+            set: { if !$0 { statusMessage = nil } }
         )) {
-            Button("OK", role: .cancel) { store.signingMessage = nil }
+            Button("OK", role: .cancel) { statusMessage = nil }
         } message: {
-            Text(store.signingMessage ?? "")
+            Text(statusMessage ?? "")
         }
     }
 
