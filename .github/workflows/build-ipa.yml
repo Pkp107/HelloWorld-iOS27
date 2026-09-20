@@ -52,10 +52,8 @@ jobs:
           name: HelloWorld-iOS27-unsigned-ipa
           path: HelloWorld-iOS27-unsigned.ipa
 
-  simulator:
+  simulator-build:
     runs-on: xcode-27
-    timeout-minutes: 3
-    continue-on-error: true
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -86,36 +84,9 @@ jobs:
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
             CODE_SIGNING_ALLOWED=NO
 
-      - name: Launch app and capture screenshot
-        shell: bash
-        run: |
-          set -euo pipefail
-          app_path="$RUNNER_TEMP/DerivedData/Build/Products/Debug-iphonesimulator/HelloWorld.app"
-          python3 - <<'PY'
-          import json
-          import os
-          import subprocess
-          import time
-
-          udid = os.environ["SIM_UDID"]
-          app_path = os.environ["RUNNER_TEMP"] + "/DerivedData/Build/Products/Debug-iphonesimulator/HelloWorld.app"
-          screenshot_path = os.environ["GITHUB_WORKSPACE"] + "/HelloWorld-iOS27-simulator.png"
-
-          devices = json.loads(subprocess.check_output(["xcrun", "simctl", "list", "devices", "available", "-j"]))
-          state = next(device["state"] for devices_for_runtime in devices["devices"].values() for device in devices_for_runtime if device["udid"] == udid)
-          if state != "Booted":
-              subprocess.run(["xcrun", "simctl", "boot", udid], check=True, timeout=45)
-          subprocess.run(["xcrun", "simctl", "bootstatus", udid, "-b"], check=True, timeout=120)
-          subprocess.run(["xcrun", "simctl", "install", udid, app_path], check=True, timeout=60)
-          subprocess.run(["xcrun", "simctl", "launch", udid, "com.example.helloworld"], check=True, timeout=30)
-          time.sleep(5)
-          subprocess.run(["xcrun", "simctl", "io", udid, "screenshot", screenshot_path], check=True, timeout=30)
-          PY
-
-      - name: Upload simulator screenshot
-        if: success()
+      - name: Upload simulator build
         uses: actions/upload-artifact@v4
         with:
-          name: HelloWorld-iOS27-simulator-screenshot
-          path: HelloWorld-iOS27-simulator.png
+          name: HelloWorld-iOS27-simulator-build
+          path: ${{ runner.temp }}/DerivedData/Build/Products/Debug-iphonesimulator/HelloWorld.app
           if-no-files-found: error

@@ -22,4 +22,4 @@ The upstream LiveContainer project is AGPLv3. This repository does not currently
 
 The iOS version used to compile the app comes from the Xcode SDK installed on GitHub's `xcode-27` macOS runner. The workflow checks that `xcrun` reports an `iphoneos` SDK beginning with `27.` and fails with the available SDK list if it does not. The deployment target remains iOS 18 so the app can run on supported devices while being compiled with the iOS 27 SDK.
 
-The simulator job also compiles the app for `iphonesimulator` and attempts a headless launch/screenshot. GitHub's Xcode 27 preview runner may not boot its simulator runtime; that diagnostic job is bounded and allowed to fail so it cannot block the device IPA build.
+The simulator-build job compiles the app for `iphonesimulator` and uploads the resulting `.app` bundle. GitHub's Xcode 27 preview runner does not currently boot its simulator runtime reliably, so live launch and screenshot testing needs a Mac/Xcode session.
