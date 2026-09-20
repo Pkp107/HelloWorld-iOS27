@@ -31,8 +31,8 @@ private enum InstallerSection: String, CaseIterable, Identifiable {
     var symbol: String {
         switch self {
         case .store: return "bag.fill"
-        case .repositories: return "server.rack"
-        case .installed: return "square.stack.3d.up.fill"
+        case .repositories: return "globe"
+        case .installed: return "shippingbox.fill"
         }
     }
 }
@@ -43,12 +43,16 @@ private struct AppStoreInstallerView: View {
     @StateObject private var catalog = InstallerCatalog()
     @State private var section = InstallerSection.store
     @State private var selectedApp: CatalogApp?
+    @State private var selectedInstallApp: CatalogApp?
 
     var body: some View {
         TabView(selection: $section) {
-            InstallerCatalogView(catalog: catalog, store: store) { app in
-                selectedApp = app
-            }
+            InstallerCatalogView(
+                catalog: catalog,
+                store: store,
+                onOpen: { selectedApp = $0 },
+                onInstall: { selectedInstallApp = $0 }
+            )
             .tabItem { Label(InstallerSection.store.title, systemImage: InstallerSection.store.symbol) }
             .tag(InstallerSection.store)
 
@@ -63,6 +67,9 @@ private struct AppStoreInstallerView: View {
         .tint(.orange)
         .task { await catalog.seedAndRefresh() }
         .sheet(item: $selectedApp) { app in
+            InstallerAppDetailView(app: app, catalog: catalog, store: store)
+        }
+        .sheet(item: $selectedInstallApp) { app in
             InstallerInstallChoiceView(app: app, catalog: catalog, store: store)
         }
     }
@@ -86,6 +93,7 @@ private enum InstallerSort: String, CaseIterable, Identifiable {
 private struct InstallerCatalogView: View {
     @ObservedObject var catalog: InstallerCatalog
     @ObservedObject var store: WorkspaceStore
+    let onOpen: (CatalogApp) -> Void
     let onInstall: (CatalogApp) -> Void
     @State private var searchText = ""
     @State private var sort = InstallerSort.alphabetical
@@ -99,17 +107,27 @@ private struct InstallerCatalogView: View {
         }
         switch sort {
         case .alphabetical:
-            return filtered.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            return filtered.sorted { lhs, rhs in
+                if lhs.hasName != rhs.hasName { return lhs.hasName }
+                return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+            }
         case .category:
-            return filtered.sorted {
-                let categoryOrder = $0.category.localizedCaseInsensitiveCompare($1.category)
+            return filtered.sorted { lhs, rhs in
+                if lhs.hasName != rhs.hasName { return lhs.hasName }
+                let categoryOrder = lhs.category.localizedCaseInsensitiveCompare(rhs.category)
                 if categoryOrder == .orderedSame {
-                    return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+                    return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
                 }
                 return categoryOrder == .orderedAscending
             }
         case .newest:
-            return filtered.sorted { $0.version.localizedStandardCompare($1.version) == .orderedDescending }
+            return filtered.sorted { lhs, rhs in
+                if lhs.hasName != rhs.hasName { return lhs.hasName }
+                if let lhsDate = lhs.releaseDate, let rhsDate = rhs.releaseDate, lhsDate != rhsDate {
+                    return lhsDate > rhsDate
+                }
+                return lhs.version.localizedStandardCompare(rhs.version) == .orderedDescending
+            }
         }
     }
 
@@ -144,9 +162,12 @@ private struct InstallerCatalogView: View {
                     )
                 } else {
                     ForEach(visibleApps) { app in
-                        InstallerCatalogRow(app: app, isDownloading: catalog.downloadingIDs.contains(app.id)) {
-                            onInstall(app)
-                        }
+                        InstallerCatalogRow(
+                            app: app,
+                            isDownloading: catalog.downloadingIDs.contains(app.id),
+                            onOpen: { onOpen(app) },
+                            onInstall: { onInstall(app) }
+                        )
                     }
                 }
             }
@@ -212,32 +233,139 @@ private struct InstallerCatalogView: View {
 private struct InstallerCatalogRow: View {
     let app: CatalogApp
     let isDownloading: Bool
-    let action: () -> Void
+    let onOpen: () -> Void
+    let onInstall: () -> Void
 
     var body: some View {
         HStack(spacing: 13) {
-            Image(systemName: "app.fill")
-                .font(.title3.weight(.semibold))
-                .foregroundStyle(.white)
-                .frame(width: 52, height: 52)
-                .background(.orange, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-            VStack(alignment: .leading, spacing: 3) {
-                Text(app.name).font(.body.weight(.semibold)).lineLimit(1)
-                Text("\(app.developer) · \(app.category)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                Text("Version \(app.version)")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+            Button(action: onOpen) {
+                HStack(spacing: 13) {
+                    CatalogAppIcon(app: app, size: 52)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(app.name).font(.body.weight(.semibold)).lineLimit(1)
+                        Text("\(app.developer) · \(app.category)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                        Text("Version \(app.version)\(app.formattedSize.map { " · \($0)" } ?? "")")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
-            Spacer(minLength: 8)
-            Button(isDownloading ? "Preparing" : "Get", action: action)
+            .buttonStyle(.plain)
+            Button(isDownloading ? "Preparing" : "Get", action: onInstall)
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
                 .disabled(isDownloading)
         }
         .padding(.vertical, 5)
+    }
+}
+
+private struct CatalogAppIcon: View {
+    let app: CatalogApp
+    let size: CGFloat
+
+    var body: some View {
+        AsyncImage(url: app.iconURL) { phase in
+            switch phase {
+            case .success(let image):
+                image.resizable().scaledToFill()
+            default:
+                Image(systemName: "square.grid.2x2.fill")
+                    .font(.system(size: size * 0.42, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color.workspaceAccent(app.tintColor), in: RoundedRectangle(cornerRadius: size * 0.25, style: .continuous))
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(RoundedRectangle(cornerRadius: size * 0.25, style: .continuous))
+        .accessibilityHidden(true)
+    }
+}
+
+private struct InstallerAppDetailView: View {
+    let app: CatalogApp
+    @ObservedObject var catalog: InstallerCatalog
+    @ObservedObject var store: WorkspaceStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var showingInstallFlow = false
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    HStack(spacing: 16) {
+                        CatalogAppIcon(app: app, size: 76)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(app.name)
+                                .font(.title3.weight(.bold))
+                            Text(app.developer)
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(.vertical, 8)
+                }
+
+                Section("App information") {
+                    LabeledContent("Name", value: app.name)
+                    LabeledContent("Bundle ID", value: app.bundleIdentifier)
+                    LabeledContent("Category", value: app.category)
+                    LabeledContent("Version", value: app.version)
+                    if let formattedSize = app.formattedSize {
+                        LabeledContent("Size", value: formattedSize)
+                    }
+                    LabeledContent("Repository", value: app.repositoryName)
+                    if let releaseDate = app.releaseDateText {
+                        LabeledContent("Released", value: releaseDate)
+                    }
+                }
+
+                Section("Description") {
+                    Text(app.description ?? "No description provided by this repository.")
+                        .foregroundStyle(.secondary)
+                }
+
+                Section("Source") {
+                    Link(destination: app.repositoryURL) {
+                        Label(app.repositoryURL.host ?? "Open repository", systemImage: "globe")
+                    }
+                    Link(destination: app.downloadURL) {
+                        Label("Open IPA download", systemImage: "arrow.down.circle")
+                    }
+                }
+            }
+            .listStyle(.insetGrouped)
+            .navigationTitle("App details")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                Button {
+                    showingInstallFlow = true
+                } label: {
+                    Label("Install", systemImage: "arrow.down.circle.fill")
+                        .font(.body.weight(.semibold))
+                        .frame(maxWidth: .infinity, minHeight: 50)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .padding(.horizontal, 18)
+                .padding(.vertical, 10)
+                .background(.bar)
+            }
+            .sheet(isPresented: $showingInstallFlow) {
+                InstallerInstallChoiceView(app: app, catalog: catalog, store: store)
+            }
+        }
     }
 }
 
@@ -250,11 +378,11 @@ private struct InstallerRepositoriesView: View {
         NavigationStack {
             List {
                 if catalog.sources.isEmpty {
-                    ContentUnavailableView("No repositories", systemImage: "server.rack", description: Text("Add an AltStore, SideStore, eSign, or KSign-compatible feed."))
+                    ContentUnavailableView("No repositories", systemImage: "globe", description: Text("Add an AltStore, SideStore, eSign, or KSign-compatible feed."))
                 } else {
                     ForEach(catalog.sources) { source in
                         HStack(spacing: 12) {
-                            Image(systemName: "server.rack")
+                            Image(systemName: "globe")
                                 .foregroundStyle(.white)
                                 .frame(width: 42, height: 42)
                                 .background(.indigo, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
@@ -351,11 +479,7 @@ private struct InstallerInstallChoiceView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     HStack(spacing: 14) {
-                        Image(systemName: "app.fill")
-                            .font(.title2.weight(.semibold))
-                            .foregroundStyle(.white)
-                            .frame(width: 62, height: 62)
-                            .background(.orange, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        CatalogAppIcon(app: app, size: 62)
                         VStack(alignment: .leading, spacing: 4) {
                             Text(app.name).font(.title3.weight(.bold))
                             Text("\(app.developer) · \(app.version)")
@@ -372,7 +496,7 @@ private struct InstallerInstallChoiceView: View {
                     .pickerStyle(.segmented)
 
                     if mode == .liveContainer {
-                        Label("The app will be installed into LiveContainer and appear on the Workspace home screen.", systemImage: "shippingbox.and.arrow.backward.fill")
+                        Label("The app will be installed into LiveContainer and appear on the Workspace home screen.", systemImage: "shippingbox.fill")
                             .font(.body)
                             .foregroundStyle(.secondary)
                     } else {
@@ -869,10 +993,29 @@ private struct CatalogApp: Identifiable {
     let id: String
     let sourceID: String
     let name: String
+    let hasName: Bool
+    let bundleIdentifier: String
     let developer: String
     let category: String
     let version: String
     let downloadURL: URL
+    let repositoryName: String
+    let repositoryURL: URL
+    let sizeBytes: Int64?
+    let description: String?
+    let releaseDate: Date?
+    let releaseDateText: String?
+    let iconURL: URL?
+    let tintColor: String
+
+    var formattedSize: String? {
+        guard let sizeBytes, sizeBytes > 0 else { return nil }
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .file
+        formatter.includesUnit = true
+        formatter.isAdaptive = true
+        return formatter.string(fromByteCount: sizeBytes)
+    }
 }
 
 @MainActor
@@ -988,8 +1131,10 @@ private final class InstallerCatalog: ObservableObject {
         let name = (root["name"] as? String) ?? sourceURL.host ?? "Repository"
         let apps = rawApps.compactMap { raw -> CatalogApp? in
             let bundleID = (raw["bundleIdentifier"] as? String) ?? (raw["id"] as? String)
-            let appName = raw["name"] as? String
-            guard let bundleID, let appName else { return nil }
+            guard let bundleID else { return nil }
+            let rawName = (raw["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let hasName = !rawName.isEmpty
+            let appName = hasName ? rawName : "Unnamed app"
             let developer = (raw["developerName"] as? String) ?? (raw["developer"] as? String) ?? "Unknown developer"
             let category = (raw["category"] as? String) ?? "Utilities"
             let versions = raw["versions"] as? [[String: Any]] ?? []
@@ -999,9 +1144,42 @@ private final class InstallerCatalog: ObservableObject {
             let downloadURL = parsedDownloadURL.absoluteURL
             guard let scheme = downloadURL.scheme?.lowercased(), scheme == "http" || scheme == "https" else { return nil }
             let versionName = (version["version"] as? String) ?? (raw["version"] as? String) ?? "Latest"
-            return CatalogApp(id: "\(sourceID)|\(bundleID)|\(versionName)", sourceID: sourceID, name: appName, developer: developer, category: category, version: versionName, downloadURL: downloadURL)
+            let iconString = raw["iconURL"] as? String
+            let iconURL = iconString.flatMap { URL(string: $0, relativeTo: sourceURL)?.absoluteURL }
+            let tintColor = (raw["tintColor"] as? String) ?? "orange"
+            let description = (version["localizedDescription"] as? String)
+                ?? (raw["localizedDescription"] as? String)
+                ?? (raw["subtitle"] as? String)
+            let sizeBytes = integerValue(version["size"] ?? raw["size"])
+            let releaseDateText = (version["date"] as? String) ?? (raw["versionDate"] as? String) ?? (raw["date"] as? String)
+            let releaseDate = releaseDateText.flatMap { ISO8601DateFormatter().date(from: $0) }
+            return CatalogApp(
+                id: "\(sourceID)|\(bundleID)|\(versionName)",
+                sourceID: sourceID,
+                name: appName,
+                hasName: hasName,
+                bundleIdentifier: bundleID,
+                developer: developer,
+                category: category,
+                version: versionName,
+                downloadURL: downloadURL,
+                repositoryName: name,
+                repositoryURL: sourceURL,
+                sizeBytes: sizeBytes,
+                description: description,
+                releaseDate: releaseDate,
+                releaseDateText: releaseDateText,
+                iconURL: iconURL,
+                tintColor: tintColor
+            )
         }
         return (name, apps)
+    }
+
+    private func integerValue(_ value: Any?) -> Int64? {
+        if let number = value as? NSNumber { return number.int64Value }
+        if let string = value as? String { return Int64(string) }
+        return nil
     }
 }
 

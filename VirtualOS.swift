@@ -62,7 +62,7 @@ enum SystemAppKind: String, Codable, CaseIterable, Hashable {
         case .appLibrary: return "square.grid.2x2.fill"
         case .settings: return "gearshape.fill"
         case .ipaSigner: return "signature"
-        case .installer: return "arrow.down.app.fill"
+        case .installer: return "bag.fill"
         case .liveContainer: return "shippingbox.and.arrow.backward.fill"
         case .liveContainerSettings: return "bolt.circle.fill"
         case .fileManager: return "folder.fill"
