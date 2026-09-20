@@ -90,17 +90,25 @@ jobs:
           set -euo pipefail
           app_path="$RUNNER_TEMP/DerivedData/Build/Products/Debug-iphonesimulator/HelloWorld.app"
           python3 - <<'PY'
+          import json
           import os
           import subprocess
+          import time
 
           udid = os.environ["SIM_UDID"]
-          subprocess.run(["xcrun", "simctl", "boot", udid], check=False)
+          app_path = os.environ["RUNNER_TEMP"] + "/DerivedData/Build/Products/Debug-iphonesimulator/HelloWorld.app"
+          screenshot_path = os.environ["GITHUB_WORKSPACE"] + "/HelloWorld-iOS27-simulator.png"
+
+          devices = json.loads(subprocess.check_output(["xcrun", "simctl", "list", "devices", "available", "-j"]))
+          state = next(device["state"] for devices_for_runtime in devices["devices"].values() for device in devices_for_runtime if device["udid"] == udid)
+          if state != "Booted":
+              subprocess.run(["xcrun", "simctl", "boot", udid], check=True, timeout=45)
           subprocess.run(["xcrun", "simctl", "bootstatus", udid, "-b"], check=True, timeout=120)
+          subprocess.run(["xcrun", "simctl", "install", udid, app_path], check=True, timeout=60)
+          subprocess.run(["xcrun", "simctl", "launch", udid, "com.example.helloworld"], check=True, timeout=30)
+          time.sleep(5)
+          subprocess.run(["xcrun", "simctl", "io", udid, "screenshot", screenshot_path], check=True, timeout=30)
           PY
-          xcrun simctl install "$SIM_UDID" "$app_path"
-          xcrun simctl launch "$SIM_UDID" com.example.helloworld
-          sleep 5
-          xcrun simctl io "$SIM_UDID" screenshot "$GITHUB_WORKSPACE/HelloWorld-iOS27-simulator.png"
 
       - name: Upload simulator screenshot
         if: success()
