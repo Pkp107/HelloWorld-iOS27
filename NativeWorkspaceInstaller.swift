@@ -134,7 +134,7 @@ final class NativeWorkspaceInstaller: ObservableObject {
         finalAppInfo.save()
         let model = LCAppModel(appInfo: finalAppInfo, delegate: appDelegate)
         DataManager.shared.model.apps.append(model)
-        if let urlSchemes = finalAppInfo.urlSchemes(), !urlSchemes.isEmpty {
+        if let urlSchemes = finalAppInfo.urlSchemes(), urlSchemes.count > 0 {
             UserDefaults.lcShared().mutableArrayValue(forKey: "LCGuestURLSchemes")
                 .addObjects(from: urlSchemes as! [Any])
         }
