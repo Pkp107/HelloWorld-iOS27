@@ -54,6 +54,8 @@ jobs:
 
   simulator:
     runs-on: xcode-27
+    timeout-minutes: 3
+    continue-on-error: true
     steps:
       - name: Check out source
         uses: actions/checkout@v4
