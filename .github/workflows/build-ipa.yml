@@ -91,6 +91,7 @@ jobs:
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
             -archivePath "$RUNNER_TEMP/WorkspaceLiveContainer.xcarchive" \
+            IPHONEOS_DEPLOYMENT_TARGET=18.0 \
             SWIFT_ACTIVE_COMPILATION_CONDITIONS=LIVE_CONTAINER_NATIVE \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO

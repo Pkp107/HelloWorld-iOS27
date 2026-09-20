@@ -733,8 +733,10 @@ extension Color {
     }
 }
 
+#if !LIVE_CONTAINER_NATIVE
 extension UTType {
     static var ipa: UTType {
         UTType(filenameExtension: "ipa") ?? .data
     }
 }
+#endif
