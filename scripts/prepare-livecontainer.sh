@@ -11,9 +11,9 @@ mkdir -p "$(dirname "${BUILD_ROOT}")"
 
 # LiveContainer is AGPLv3. The build uses the pinned upstream source directly
 # so the native bootstrap, extensions, ZSign, and submodules stay in sync.
-git clone --recurse-submodules "${UPSTREAM_REPOSITORY}" "${BUILD_ROOT}"
-git -C "${BUILD_ROOT}" checkout --detach "${UPSTREAM_REVISION}"
-git -C "${BUILD_ROOT}" submodule update --init --recursive
+git clone --recurse-submodules "${UPSTREAM_REPOSITORY}" "${BUILD_ROOT}" >&2
+git -C "${BUILD_ROOT}" checkout --detach "${UPSTREAM_REVISION}" >&2
+git -C "${BUILD_ROOT}" submodule update --init --recursive >&2
 
 SHELL_ROOT="${BUILD_ROOT}/LiveContainerSwiftUI/WorkspaceShell"
 mkdir -p "${SHELL_ROOT}"

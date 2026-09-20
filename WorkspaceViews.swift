@@ -857,8 +857,8 @@ struct LiveContainerSettingsView: View {
     }
 }
 
-@MainActor
 #if LIVE_CONTAINER_NATIVE
+@MainActor
 struct IPASignerView: View {
     @ObservedObject var store: WorkspaceStore
 
@@ -867,6 +867,7 @@ struct IPASignerView: View {
     }
 }
 #else
+@MainActor
 struct IPASignerView: View {
     @ObservedObject var store: WorkspaceStore
     @StateObject private var assetStore = SigningAssetStore()
