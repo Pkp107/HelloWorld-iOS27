@@ -654,6 +654,9 @@ struct WorkspaceFileManagerView: View {
             }
             .listStyle(.insetGrouped)
             .navigationTitle("File Manager")
+            .safeAreaInset(edge: .top, spacing: 0) {
+                WorkspacePathBreadcrumb(path: ["Workspace Files"])
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { showingImporter = true } label: { Image(systemName: "plus") }
