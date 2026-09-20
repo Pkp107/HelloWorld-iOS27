@@ -30,7 +30,7 @@ jobs:
         run: |
           xcodebuild archive \
             -project HelloWorld.xcodeproj \
-            -target HelloWorld \
+            -scheme HelloWorld \
             -configuration Release \
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
