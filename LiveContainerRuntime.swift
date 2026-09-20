@@ -2,8 +2,9 @@ import Foundation
 
 /// Describes what the current target can see at compile time.
 ///
-/// `nativeFrameworkDetected` only means that a LiveContainer module can be
-/// imported by this target. It does not mean that guest execution is wired.
+/// The native build is assembled from the upstream LiveContainer targets;
+/// the lightweight target retains the same status boundary without claiming
+/// that it can launch guest processes.
 enum RuntimeAvailability: String, Codable, CaseIterable {
     case unavailable
     case nativeFrameworkDetected
@@ -24,8 +25,6 @@ enum RuntimeAvailability: String, Codable, CaseIterable {
 
 /// The states exposed to the workspace UI for a stored app.
 ///
-/// `nativeExecutionReady` is reserved for a future adapter that actually
-/// invokes the upstream bootstrap. The current target never returns it.
 enum LiveContainerExecutionState: String, Codable, CaseIterable {
     case builtIn
     case ipaMissing
@@ -90,12 +89,8 @@ protocol LiveContainerRuntimeBridge {
     func inspect(ipaURL: URL?, isBuiltIn: Bool) -> LiveContainerRuntimeReport
 }
 
-/// Small boundary for the eventual native LiveContainer integration.
-///
-/// LiveContainer's real execution path is a collection of native targets
-/// (bootstrap, shared framework, loader, extensions, and entitlements). This
-/// app deliberately does not vendor those targets, so imported IPAs remain
-/// managed files until a concrete native adapter is added.
+/// Reports the capability of the current build without making the fallback
+/// target look like a guest-app runtime.
 struct LiveContainerRuntime: LiveContainerRuntimeBridge {
     static let shared = LiveContainerRuntime()
 
@@ -106,7 +101,7 @@ struct LiveContainerRuntime: LiveContainerRuntimeBridge {
     }
 
     var availability: RuntimeAvailability {
-#if canImport(LiveContainerShared)
+#if LIVE_CONTAINER_NATIVE || canImport(LiveContainerShared)
         return .nativeFrameworkDetected
 #else
         return .unavailable
@@ -144,14 +139,24 @@ struct LiveContainerRuntime: LiveContainerRuntimeBridge {
             )
         }
 
-#if canImport(LiveContainerShared)
+#if LIVE_CONTAINER_NATIVE || canImport(LiveContainerShared)
+#if LIVE_CONTAINER_NATIVE
+        return LiveContainerRuntimeReport(
+            availability: availability,
+            state: .nativeExecutionReady,
+            signing: .hostCertificateRequired,
+            storedIPAURL: ipaURL,
+            message: "Native LiveContainer is available. Import and launch this guest from the Installer or Installed Apps surface."
+        )
+#else
         return LiveContainerRuntimeReport(
             availability: availability,
             state: .managedOnly,
             signing: .hostCertificateRequired,
             storedIPAURL: ipaURL,
-            message: "IPA found. A native launch adapter still needs to bind the LiveContainer bootstrap."
+            message: "IPA found. This lightweight build can manage the file, but it does not include the native LiveContainer host."
         )
+#endif
 #else
         return LiveContainerRuntimeReport(
             availability: availability,

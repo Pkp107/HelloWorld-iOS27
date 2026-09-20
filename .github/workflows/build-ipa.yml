@@ -52,6 +52,65 @@ jobs:
           name: HelloWorld-iOS27-unsigned-ipa
           path: HelloWorld-iOS27-unsigned.ipa
 
+  livecontainer-build:
+    name: Build Workspace with LiveContainer runtime
+    runs-on: xcode-27
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Select Xcode with iOS 27 SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdk_version="$(xcrun --sdk iphoneos --show-sdk-version)"
+          echo "Using iOS SDK ${sdk_version}"
+          if [[ "${sdk_version}" != 27.* ]]; then
+            xcodebuild -showsdks
+            exit 1
+          fi
+
+      - name: Prepare pinned LiveContainer source
+        id: prepare
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_root="$(bash scripts/prepare-livecontainer.sh)"
+          echo "source_root=${source_root}" >> "$GITHUB_OUTPUT"
+
+      - name: Build integrated unsigned archive
+        shell: bash
+        env:
+          SOURCE_ROOT: ${{ steps.prepare.outputs.source_root }}
+        run: |
+          set -euo pipefail
+          xcodebuild archive \
+            -project "$SOURCE_ROOT/LiveContainer.xcodeproj" \
+            -scheme LiveContainer \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/WorkspaceLiveContainer.xcarchive" \
+            SWIFT_ACTIVE_COMPILATION_CONDITIONS=LIVE_CONTAINER_NATIVE \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO
+
+      - name: Package integrated unsigned IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          app_path="$RUNNER_TEMP/WorkspaceLiveContainer.xcarchive/Products/Applications/LiveContainer.app"
+          test -d "$app_path"
+          mkdir -p "$RUNNER_TEMP/workspace-ipa/Payload"
+          cp -R "$app_path" "$RUNNER_TEMP/workspace-ipa/Payload/Workspace.app"
+          (cd "$RUNNER_TEMP/workspace-ipa" && zip -qry "$GITHUB_WORKSPACE/Workspace-iOS27-livecontainer-unsigned.ipa" Payload)
+
+      - name: Upload integrated IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Workspace-iOS27-livecontainer-unsigned-ipa
+          path: Workspace-iOS27-livecontainer-unsigned.ipa
+
   simulator-build:
     runs-on: xcode-27
     steps:

@@ -1,30 +1,45 @@
 import SwiftUI
+import UIKit
 
 struct ContentView: View {
     @ObservedObject var store: WorkspaceStore
     @State private var activeApp: VirtualApp?
     @State private var folder: VirtualFolder?
+    @State private var showingOnboarding = false
+
+    private var launcherApps: [VirtualApp] {
+        // Imported guests live under the LiveContainer entry. Keep the launcher
+        // itself limited to system surfaces and folders so it remains scannable.
+        store.homeApps.filter { $0.isBuiltIn || $0.systemApp != nil }
+    }
 
     var body: some View {
-        ZStack {
-            Color(uiColor: .systemGroupedBackground)
-                .ignoresSafeArea()
+        GeometryReader { proxy in
+            ZStack {
+                WallpaperBackground(
+                    choice: String(describing: store.settings.wallpaper),
+                    imageURL: store.wallpaperURL
+                )
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
-                    HomeHeader(itemCount: store.homeApps.count + store.folders.count)
+                // This is deliberately a fixed launcher surface. Guest apps are
+                // opened from LiveContainer and never make the home grid taller.
+                VStack(alignment: .leading, spacing: 18) {
+                    HomeHeader(itemCount: launcherApps.count + store.folders.count)
                     HomeGrid(
-                        apps: store.homeApps,
+                        apps: launcherApps,
                         folders: store.folders,
                         columns: store.settings.gridColumns,
                         showLabels: store.settings.showAppLabels,
                         onOpenApp: open,
                         onOpenFolder: { folder = $0 }
                     )
+                    .frame(maxHeight: max(0, proxy.size.height - 164), alignment: .top)
+                    .clipped()
+                    Spacer(minLength: 0)
                 }
                 .padding(.horizontal, 20)
                 .padding(.top, 12)
-                .padding(.bottom, 120)
+                .padding(.bottom, 8)
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -42,6 +57,18 @@ struct ContentView: View {
         }
         .sheet(item: $folder) { folder in
             FolderView(folder: folder, store: store, onOpen: open)
+        }
+        .fullScreenCover(isPresented: $showingOnboarding) {
+            WorkspaceOnboardingView(store: store) {
+                store.completeOnboarding()
+                showingOnboarding = false
+            }
+        }
+        .onAppear {
+            showingOnboarding = store.needsOnboarding
+        }
+        .onChange(of: store.needsOnboarding) { _, needsOnboarding in
+            if needsOnboarding { showingOnboarding = true }
         }
         .alert("Workspace problem", isPresented: Binding(
             get: { store.importError != nil },
@@ -220,14 +247,305 @@ struct RuntimeWindow: View {
         case .helloWorld:
             BuiltInHelloWorldView()
         case .appLibrary:
-            AppLibraryView(store: store, onOpen: onOpen)
-        case .settings:
-            SettingsView(store: store)
+            LiveContainerAppsView(store: store, onOpen: onOpen)
         case .ipaSigner:
             IPASignerView(store: store)
+        case .installer:
+            InstallerView(store: store, onOpen: onOpen)
+        case .liveContainer:
+            LiveContainerAppsView(store: store, onOpen: onOpen)
+        case .liveContainerSettings:
+            LiveContainerSettingsView(store: store)
+        case .settings:
+            SettingsView(store: store)
         case nil:
             ImportedRuntimeView(app: app, store: store)
         }
+    }
+}
+
+private struct WallpaperBackground: View {
+    let choice: String
+    let imageURL: URL?
+
+    private var normalizedChoice: String {
+        choice.lowercased().replacingOccurrences(of: " ", with: "")
+    }
+
+    var body: some View {
+        ZStack {
+            if let imageURL, let image = UIImage(contentsOfFile: imageURL.path) {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .overlay(.black.opacity(0.12))
+            } else {
+                switch normalizedChoice {
+                case "aurora":
+                    LinearGradient(
+                        colors: [Color(red: 0.10, green: 0.33, blue: 0.38), Color(red: 0.18, green: 0.12, blue: 0.34)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                case "midnight":
+                    LinearGradient(
+                        colors: [Color(red: 0.02, green: 0.04, blue: 0.10), Color(red: 0.10, green: 0.16, blue: 0.28)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                case "ocean":
+                    LinearGradient(
+                        colors: [Color(red: 0.02, green: 0.23, blue: 0.38), Color(red: 0.06, green: 0.09, blue: 0.28)],
+                        startPoint: .top,
+                        endPoint: .bottomTrailing
+                    )
+                case "sunrise":
+                    LinearGradient(
+                        colors: [Color(red: 0.95, green: 0.37, blue: 0.25), Color(red: 0.40, green: 0.12, blue: 0.32)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                case "forest":
+                    LinearGradient(
+                        colors: [Color(red: 0.05, green: 0.27, blue: 0.22), Color(red: 0.02, green: 0.10, blue: 0.15)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                default:
+                    Color(uiColor: .systemGroupedBackground)
+                }
+            }
+        }
+        .clipped()
+        .ignoresSafeArea()
+    }
+}
+
+private struct WorkspaceOnboardingView: View {
+    @ObservedObject var store: WorkspaceStore
+    let onFinish: () -> Void
+    @State private var page = 0
+
+    private let pageCount = 4
+
+    var body: some View {
+        ZStack {
+            WallpaperBackground(
+                choice: String(describing: store.settings.wallpaper),
+                imageURL: store.wallpaperURL
+            )
+
+            VStack(spacing: 0) {
+                HStack {
+                    Text("Workspace setup")
+                        .font(.headline)
+                    Spacer()
+                    Text("Step \(page + 1) of \(pageCount)")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 24)
+                .padding(.top, 18)
+
+                TabView(selection: $page) {
+                    OnboardingWelcomePage()
+                        .tag(0)
+                    OnboardingWallpaperPage(store: store)
+                        .tag(1)
+                    OnboardingJITPage(store: store)
+                        .tag(2)
+                    OnboardingReadyPage()
+                        .tag(3)
+                }
+                .tabViewStyle(.page(indexDisplayMode: .always))
+
+                Button(page == pageCount - 1 ? "Finish setup" : "Continue") {
+                    if page == pageCount - 1 {
+                        onFinish()
+                    } else {
+                        withAnimation(.easeInOut(duration: 0.25)) { page += 1 }
+                    }
+                }
+                .font(.body.weight(.semibold))
+                .frame(maxWidth: .infinity, minHeight: 50)
+                .buttonStyle(.borderedProminent)
+                .padding(.horizontal, 24)
+                .padding(.bottom, 18)
+            }
+        }
+        .interactiveDismissDisabled()
+    }
+}
+
+private struct OnboardingWelcomePage: View {
+    var body: some View {
+        OnboardingPageLayout(
+            symbol: "rectangle.3.group.fill",
+            title: "Your private workspace",
+            message: "Keep your launcher, LiveContainer apps, and setup tools together in one focused home screen. The host still needs a compatible developer certificate when you install it."
+        )
+    }
+}
+
+private struct OnboardingWallpaperPage: View {
+    @ObservedObject var store: WorkspaceStore
+    @State private var showingImporter = false
+
+    var body: some View {
+        OnboardingPageLayout(
+            symbol: "photo.fill",
+            title: "Choose a wallpaper",
+            message: "Pick the backdrop you want to see each time Workspace opens. You can change it later in Settings."
+        ) {
+            Picker("Wallpaper", selection: $store.settings.wallpaper) {
+                ForEach(WallpaperOption.allCases, id: \.self) { choice in
+                    Text(Self.label(for: choice)).tag(choice)
+                }
+            }
+            .pickerStyle(.menu)
+            .onChange(of: store.settings) { _, _ in store.settingsDidChange() }
+            if store.settings.wallpaper == .custom {
+                Button {
+                    showingImporter = true
+                } label: {
+                    Label("Choose photo", systemImage: "photo.on.rectangle")
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+        .fileImporter(
+            isPresented: $showingImporter,
+            allowedContentTypes: [.image],
+            allowsMultipleSelection: false
+        ) { result in
+            if case .success(let urls) = result, let url = urls.first {
+                _ = store.importWallpaper(from: url)
+            }
+        }
+    }
+
+    private static func label(for choice: WallpaperOption) -> String {
+        String(describing: choice)
+            .replacingOccurrences(of: "([a-z])([A-Z])", with: "$1 $2", options: .regularExpression)
+            .capitalized
+    }
+}
+
+private struct OnboardingJITPage: View {
+    @ObservedObject var store: WorkspaceStore
+    @StateObject private var assetStore = SigningAssetStore()
+    @State private var showingCertificateImporter = false
+    @State private var showingProfileImporter = false
+
+    var body: some View {
+        OnboardingPageLayout(
+            symbol: "bolt.fill",
+            title: "Set up JIT when you need it",
+            message: "Choose the path you normally use for emulators and other apps that need Just-In-Time compilation. This can be changed in LiveContainer settings."
+        ) {
+            Picker("JIT method", selection: $store.settings.jitProvider) {
+                ForEach(JITProvider.allCases, id: \.self) { provider in
+                    Text(Self.label(for: provider)).tag(provider)
+                }
+            }
+            .pickerStyle(.wheel)
+            .frame(height: 110)
+            .onChange(of: store.settings) { _, _ in store.settingsDidChange() }
+            if store.settings.jitProvider == .certificate {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Developer certificate setup")
+                        .font(.subheadline.weight(.semibold))
+                    Button {
+                        showingCertificateImporter = true
+                    } label: {
+                        Label(
+                            assetStore.asset(for: .certificate)?.originalName ?? "Choose .p12 certificate",
+                            systemImage: "key.fill"
+                        )
+                    }
+                    Button {
+                        showingProfileImporter = true
+                    } label: {
+                        Label(
+                            assetStore.asset(for: .provisioningProfile)?.originalName ?? "Choose .mobileprovision",
+                            systemImage: "doc.badge.gearshape"
+                        )
+                    }
+                }
+            } else if store.settings.jitProvider == .jitStreamer {
+                Text("JIT Streamer can be configured later from LiveContainer Settings.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .fileImporter(
+            isPresented: $showingCertificateImporter,
+            allowedContentTypes: [.data],
+            allowsMultipleSelection: false
+        ) { result in
+            if case .success(let urls) = result, let url = urls.first {
+                assetStore.importAsset(from: url, kind: .certificate)
+            }
+        }
+        .fileImporter(
+            isPresented: $showingProfileImporter,
+            allowedContentTypes: [.data],
+            allowsMultipleSelection: false
+        ) { result in
+            if case .success(let urls) = result, let url = urls.first {
+                assetStore.importAsset(from: url, kind: .provisioningProfile)
+            }
+        }
+    }
+
+    private static func label(for provider: JITProvider) -> String {
+        String(describing: provider)
+            .replacingOccurrences(of: "([a-z])([A-Z])", with: "$1 $2", options: .regularExpression)
+            .capitalized
+    }
+}
+
+private struct OnboardingReadyPage: View {
+    var body: some View {
+        OnboardingPageLayout(
+            symbol: "checkmark.circle.fill",
+            title: "You are ready",
+            message: "Use Installer to add repositories or import an IPA, then open LiveContainer to launch installed guest apps."
+        )
+    }
+}
+
+private struct OnboardingPageLayout<Content: View>: View {
+    let symbol: String
+    let title: String
+    let message: String
+    @ViewBuilder let content: () -> Content
+
+    init(symbol: String, title: String, message: String, @ViewBuilder content: @escaping () -> Content = { EmptyView() }) {
+        self.symbol = symbol
+        self.title = title
+        self.message = message
+        self.content = content
+    }
+
+    var body: some View {
+        VStack(spacing: 22) {
+            Spacer()
+            Image(systemName: symbol)
+                .font(.system(size: 64, weight: .semibold))
+                .foregroundStyle(.tint)
+            Text(title)
+                .font(.title.weight(.bold))
+                .multilineTextAlignment(.center)
+            Text(message)
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 330)
+            content()
+            Spacer()
+        }
+        .padding(.horizontal, 32)
     }
 }
 

@@ -4,16 +4,50 @@ import UniformTypeIdentifiers
 
 enum SystemAppKind: String, Codable, CaseIterable, Hashable {
     case helloWorld
+    // Kept as a source-compatible spelling for older callers. Persisted
+    // `appLibrary` values decode to `liveContainer` below and this legacy
+    // case is intentionally excluded from `allCases` so it is never seeded.
     case appLibrary
     case settings
     case ipaSigner
+    case installer
+    case liveContainer
+    case liveContainerSettings
+
+    static var allCases: [SystemAppKind] {
+        [.helloWorld, .settings, .ipaSigner, .installer, .liveContainer, .liveContainerSettings]
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let rawValue = try container.decode(String.self)
+        if rawValue == "appLibrary" {
+            self = .liveContainer
+            return
+        }
+        guard let value = SystemAppKind(rawValue: rawValue) else {
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "Unknown system app kind: \(rawValue)"
+            )
+        }
+        self = value
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
 
     var displayName: String {
         switch self {
         case .helloWorld: return "Hello World"
-        case .appLibrary: return "App Library"
+        case .appLibrary: return "Installed Apps"
         case .settings: return "Settings"
         case .ipaSigner: return "IPA Signer"
+        case .installer: return "Installer"
+        case .liveContainer: return "LiveContainer"
+        case .liveContainerSettings: return "LiveContainer Settings"
         }
     }
 
@@ -23,6 +57,9 @@ enum SystemAppKind: String, Codable, CaseIterable, Hashable {
         case .appLibrary: return "square.grid.2x2.fill"
         case .settings: return "gearshape.fill"
         case .ipaSigner: return "signature"
+        case .installer: return "arrow.down.app.fill"
+        case .liveContainer: return "shippingbox.and.arrow.backward.fill"
+        case .liveContainerSettings: return "bolt.circle.fill"
         }
     }
 
@@ -32,15 +69,108 @@ enum SystemAppKind: String, Codable, CaseIterable, Hashable {
         case .appLibrary: return "purple"
         case .settings: return "gray"
         case .ipaSigner: return "teal"
+        case .installer: return "orange"
+        case .liveContainer: return "green"
+        case .liveContainerSettings: return "indigo"
         }
     }
 
     var category: String {
         switch self {
         case .helloWorld: return "System"
-        case .appLibrary, .settings, .ipaSigner: return "Utilities"
+        case .appLibrary, .settings, .ipaSigner, .installer, .liveContainer, .liveContainerSettings: return "Utilities"
         }
     }
+}
+
+enum WallpaperOption: String, Codable, CaseIterable, Identifiable, Hashable {
+    case aurora
+    case midnight
+    case ocean
+    case sunrise
+    case forest
+    case custom
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .aurora: return "Aurora"
+        case .midnight: return "Midnight"
+        case .ocean: return "Ocean"
+        case .sunrise: return "Sunrise"
+        case .forest: return "Forest"
+        case .custom: return "Custom photo"
+        }
+    }
+
+    var iconSymbol: String {
+        switch self {
+        case .custom: return "photo"
+        default: return "rectangle.inset.filled"
+        }
+    }
+}
+
+enum GlassStyle: String, Codable, CaseIterable, Identifiable, Hashable {
+    case frosted
+    case clear
+    case tinted
+    case opaque
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .frosted: return "Frosted"
+        case .clear: return "Clear"
+        case .tinted: return "Tinted"
+        case .opaque: return "Opaque"
+        }
+    }
+}
+
+enum LaunchMode: String, Codable, CaseIterable, Identifiable, Hashable {
+    case automatic
+    case single
+    case parallel
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .automatic: return "Automatic"
+        case .single: return "Single app"
+        case .parallel: return "Parallel apps"
+        }
+    }
+}
+
+enum JITProvider: String, Codable, CaseIterable, Identifiable, Hashable {
+    case unconfigured
+    case certificate
+    case jitStreamer
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .unconfigured: return "Not configured"
+        case .certificate: return "Certificate"
+        case .jitStreamer: return "JIT Streamer"
+        }
+    }
+}
+
+enum OnboardingStep: String, Codable, CaseIterable, Identifiable, Hashable {
+    case welcome
+    case runtime
+    case jit
+    case wallpaper
+    case appearance
+    case complete
+
+    var id: String { rawValue }
 }
 
 enum VirtualAppStatus: String, Codable, CaseIterable {
@@ -88,6 +218,87 @@ struct WorkspaceSettings: Codable, Equatable {
     var gridColumns = 4
     var confirmRemoval = true
     var reduceShellMotion = false
+
+    var wallpaper: WallpaperOption = .aurora
+    var customWallpaperFileName: String?
+    var glassStyle: GlassStyle = .frosted
+    var glassOpacity = 0.78
+    var glassBlurRadius = 20.0
+
+    var launchMode: LaunchMode = .automatic
+    var jitProvider: JITProvider = .unconfigured
+    var jitEnabled = false
+    var jitAppIDs: Set<UUID> = []
+
+    var backgroundExecutionEnabled = true
+    var backgroundAppLimit = 3
+    var showDockRecents = true
+    var perAppAudioEnabled = true
+    var appAudioLevels: [String: Double] = [:]
+    var mutedAppIDs: Set<UUID> = []
+
+    var onboardingCompleted = false
+    var onboardingStep: OnboardingStep = .welcome
+
+    var hasCompletedOnboarding: Bool {
+        get { onboardingCompleted }
+        set { onboardingCompleted = newValue }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case showAppLabels
+        case gridColumns
+        case confirmRemoval
+        case reduceShellMotion
+        case wallpaper
+        case customWallpaperFileName
+        case glassStyle
+        case glassOpacity
+        case glassBlurRadius
+        case launchMode
+        case jitProvider
+        case jitEnabled
+        case jitAppIDs
+        case backgroundExecutionEnabled
+        case backgroundAppLimit
+        case showDockRecents
+        case perAppAudioEnabled
+        case appAudioLevels
+        case mutedAppIDs
+        case onboardingCompleted
+        case onboardingStep
+    }
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        showAppLabels = try container.decodeIfPresent(Bool.self, forKey: .showAppLabels) ?? true
+        gridColumns = try container.decodeIfPresent(Int.self, forKey: .gridColumns) ?? 4
+        confirmRemoval = try container.decodeIfPresent(Bool.self, forKey: .confirmRemoval) ?? true
+        reduceShellMotion = try container.decodeIfPresent(Bool.self, forKey: .reduceShellMotion) ?? false
+
+        wallpaper = (try? container.decodeIfPresent(WallpaperOption.self, forKey: .wallpaper)) ?? .aurora
+        customWallpaperFileName = try container.decodeIfPresent(String.self, forKey: .customWallpaperFileName)
+        glassStyle = (try? container.decodeIfPresent(GlassStyle.self, forKey: .glassStyle)) ?? .frosted
+        glassOpacity = try container.decodeIfPresent(Double.self, forKey: .glassOpacity) ?? 0.78
+        glassBlurRadius = try container.decodeIfPresent(Double.self, forKey: .glassBlurRadius) ?? 20
+
+        launchMode = (try? container.decodeIfPresent(LaunchMode.self, forKey: .launchMode)) ?? .automatic
+        jitProvider = (try? container.decodeIfPresent(JITProvider.self, forKey: .jitProvider)) ?? .unconfigured
+        jitEnabled = try container.decodeIfPresent(Bool.self, forKey: .jitEnabled) ?? false
+        jitAppIDs = try container.decodeIfPresent(Set<UUID>.self, forKey: .jitAppIDs) ?? []
+
+        backgroundExecutionEnabled = try container.decodeIfPresent(Bool.self, forKey: .backgroundExecutionEnabled) ?? true
+        backgroundAppLimit = try container.decodeIfPresent(Int.self, forKey: .backgroundAppLimit) ?? 3
+        showDockRecents = try container.decodeIfPresent(Bool.self, forKey: .showDockRecents) ?? true
+        perAppAudioEnabled = try container.decodeIfPresent(Bool.self, forKey: .perAppAudioEnabled) ?? true
+        appAudioLevels = try container.decodeIfPresent([String: Double].self, forKey: .appAudioLevels) ?? [:]
+        mutedAppIDs = try container.decodeIfPresent(Set<UUID>.self, forKey: .mutedAppIDs) ?? []
+
+        onboardingCompleted = try container.decodeIfPresent(Bool.self, forKey: .onboardingCompleted) ?? false
+        onboardingStep = (try? container.decodeIfPresent(OnboardingStep.self, forKey: .onboardingStep)) ?? (onboardingCompleted ? .complete : .welcome)
+    }
 }
 
 private struct WorkspaceSnapshot: Codable {
@@ -126,9 +337,13 @@ final class WorkspaceStore: ObservableObject {
     private let fileManager = FileManager.default
     private let builtInIDs: [SystemAppKind: UUID] = [
         .helloWorld: UUID(uuidString: "A7A82D56-1F2C-4B27-9FA9-000000000001")!,
-        .appLibrary: UUID(uuidString: "A7A82D56-1F2C-4B27-9FA9-000000000002")!,
         .settings: UUID(uuidString: "A7A82D56-1F2C-4B27-9FA9-000000000003")!,
-        .ipaSigner: UUID(uuidString: "A7A82D56-1F2C-4B27-9FA9-000000000004")!
+        .ipaSigner: UUID(uuidString: "A7A82D56-1F2C-4B27-9FA9-000000000004")!,
+        .installer: UUID(uuidString: "A7A82D56-1F2C-4B27-9FA9-000000000005")!,
+        // Reuse the old App Library identifier so migration maps that app in
+        // place instead of adding a duplicate LiveContainer icon.
+        .liveContainer: UUID(uuidString: "A7A82D56-1F2C-4B27-9FA9-000000000002")!,
+        .liveContainerSettings: UUID(uuidString: "A7A82D56-1F2C-4B27-9FA9-000000000006")!
     ]
 
     init() {
@@ -147,6 +362,23 @@ final class WorkspaceStore: ObservableObject {
             if lhs.isBuiltIn != rhs.isBuiltIn { return lhs.isBuiltIn }
             return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
         }
+    }
+
+    /// Non-system packages managed by the LiveContainer runtime.
+    var installedApps: [VirtualApp] {
+        apps.filter { !$0.isBuiltIn }
+            .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+    }
+
+    var liveContainerApps: [VirtualApp] { installedApps }
+
+    var needsOnboarding: Bool { !settings.onboardingCompleted }
+
+    var wallpaperURL: URL? {
+        guard settings.wallpaper == .custom,
+              let fileName = settings.customWallpaperFileName else { return nil }
+        let url = wallpapersDirectory.appendingPathComponent(fileName, isDirectory: false)
+        return fileManager.fileExists(atPath: url.path) ? url : nil
     }
 
     func apps(in folder: VirtualFolder) -> [VirtualApp] {
@@ -169,7 +401,8 @@ final class WorkspaceStore: ObservableObject {
         save()
     }
 
-    func importIPA(from url: URL) {
+    /// Imports an IPA into the installer-managed package store.
+    func installerImportIPA(from url: URL) {
         let hasAccess = url.startAccessingSecurityScopedResource()
         defer {
             if hasAccess { url.stopAccessingSecurityScopedResource() }
@@ -206,6 +439,105 @@ final class WorkspaceStore: ObservableObject {
         } catch {
             importError = "Could not import \(url.lastPathComponent): \(error.localizedDescription)"
         }
+    }
+
+    /// Compatibility entry point for existing callers. New installer UI
+    /// should call `installerImportIPA(from:)` directly.
+    func importIPA(from url: URL) {
+        installerImportIPA(from: url)
+    }
+
+    func installIPA(from url: URL) {
+        installerImportIPA(from: url)
+    }
+
+    func selectWallpaper(_ option: WallpaperOption) {
+        settings.wallpaper = option
+        if option != .custom {
+            settings.customWallpaperFileName = nil
+        }
+        save()
+    }
+
+    @discardableResult
+    func importWallpaper(from url: URL) -> Bool {
+        let hasAccess = url.startAccessingSecurityScopedResource()
+        defer {
+            if hasAccess { url.stopAccessingSecurityScopedResource() }
+        }
+
+        do {
+            guard fileManager.fileExists(atPath: url.path) else {
+                throw CocoaError(.fileNoSuchFile)
+            }
+            let ext = url.pathExtension.lowercased()
+            guard ["jpg", "jpeg", "png", "heic", "heif", "webp"].contains(ext) else {
+                throw CocoaError(.fileReadUnsupportedScheme)
+            }
+            try fileManager.createDirectory(at: wallpapersDirectory, withIntermediateDirectories: true)
+            if let oldName = settings.customWallpaperFileName {
+                try? fileManager.removeItem(at: wallpapersDirectory.appendingPathComponent(oldName))
+            }
+            let storedName = "wallpaper-\(UUID().uuidString).\(ext)"
+            let destination = wallpapersDirectory.appendingPathComponent(storedName, isDirectory: false)
+            try fileManager.copyItem(at: url, to: destination)
+            settings.wallpaper = .custom
+            settings.customWallpaperFileName = storedName
+            save()
+            return true
+        } catch {
+            importError = "Could not import wallpaper: \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    func removeCustomWallpaper() {
+        if let fileName = settings.customWallpaperFileName {
+            try? fileManager.removeItem(at: wallpapersDirectory.appendingPathComponent(fileName))
+        }
+        settings.customWallpaperFileName = nil
+        if settings.wallpaper == .custom {
+            settings.wallpaper = .aurora
+        }
+        save()
+    }
+
+    func setOnboardingStep(_ step: OnboardingStep) {
+        settings.onboardingStep = step
+        if step == .complete {
+            settings.onboardingCompleted = true
+        }
+        save()
+    }
+
+    func completeOnboarding() {
+        settings.onboardingStep = .complete
+        settings.onboardingCompleted = true
+        save()
+    }
+
+    func resetOnboarding() {
+        settings.onboardingStep = .welcome
+        settings.onboardingCompleted = false
+        save()
+    }
+
+    func setAudioLevel(_ level: Double, for app: VirtualApp) {
+        settings.appAudioLevels[app.id.uuidString] = min(max(level, 0), 1)
+        save()
+    }
+
+    func audioLevel(for app: VirtualApp) -> Double {
+        settings.appAudioLevels[app.id.uuidString] ?? 1
+    }
+
+    func setMuted(_ muted: Bool, for app: VirtualApp) {
+        if muted {
+            settings.mutedAppIDs.insert(app.id)
+        } else {
+            settings.mutedAppIDs.remove(app.id)
+        }
+        save()
     }
 
     func ipaURL(for app: VirtualApp) -> URL? {
@@ -278,6 +610,10 @@ final class WorkspaceStore: ObservableObject {
         applicationSupportDirectory.appendingPathComponent("Imports", isDirectory: true)
     }
 
+    private var wallpapersDirectory: URL {
+        applicationSupportDirectory.appendingPathComponent("Wallpapers", isDirectory: true)
+    }
+
     private var stateURL: URL {
         applicationSupportDirectory.appendingPathComponent("workspace.json")
     }
@@ -318,6 +654,10 @@ final class WorkspaceStore: ObservableObject {
             if let index = apps.firstIndex(where: { $0.id == expectedID || $0.systemApp == kind }) {
                 if apps[index].systemApp != kind {
                     apps[index].systemApp = kind
+                    changed = true
+                }
+                if kind == .liveContainer, apps[index].displayName == "App Library" {
+                    apps[index].displayName = kind.displayName
                     changed = true
                 }
                 if !apps[index].isBuiltIn {
