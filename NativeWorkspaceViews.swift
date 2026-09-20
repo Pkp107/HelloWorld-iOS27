@@ -140,6 +140,8 @@ enum NativeSigningConfiguration {
             throw NativeSigningConfigurationError.passwordMissing
         }
 
+        WorkspaceCertificatePasswordStore.save(certificatePassword)
+
         // LiveContainer reads this configuration when it invokes its native
         // JIT and signing path. The source files remain in Workspace storage.
         LCUtils.appGroupUserDefault.set(certificate, forKey: "LCCertificateData")
@@ -210,7 +212,10 @@ struct NativeIPASignerView: View {
                     )
                     SecureField("Certificate password", text: $certificatePassword)
                         .textContentType(.password)
-                    Text("The profile is embedded in the selected IPA before signing. The password is used only for this signing operation and is not saved.")
+                        .onChange(of: certificatePassword) { _, value in
+                            WorkspaceCertificatePasswordStore.save(value)
+                        }
+                    Text("The profile is embedded in the selected IPA before signing. The password is stored locally and reused for future signing and JIT setup.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                     Text("You can share the certificate and profile from Files to Workspace instead of browsing for them here.")
@@ -253,6 +258,11 @@ struct NativeIPASignerView: View {
                 }
             }
             .navigationTitle("IPA Signer")
+        }
+        .onAppear {
+            if certificatePassword.isEmpty {
+                certificatePassword = WorkspaceCertificatePasswordStore.load()
+            }
         }
         .fileImporter(
             isPresented: $showingPackageImporter,

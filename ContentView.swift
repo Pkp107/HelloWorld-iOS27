@@ -494,6 +494,9 @@ private struct OnboardingJITPage: View {
                     if assetStore.asset(for: .certificate) != nil {
                         SecureField("Certificate password", text: $certificatePassword)
                             .textContentType(.password)
+                            .onChange(of: certificatePassword) { _, value in
+                                WorkspaceCertificatePasswordStore.save(value)
+                            }
                         #if LIVE_CONTAINER_NATIVE
                         Button("Use certificate for LiveContainer JIT") {
                             configureLiveContainerJIT()
@@ -549,6 +552,11 @@ private struct OnboardingJITPage: View {
                 if let url = urls.first { assetStore.importAsset(from: url, kind: .provisioningProfile) }
             case .failure(let error):
                 assetStore.errorMessage = error.localizedDescription
+            }
+        }
+        .onAppear {
+            if certificatePassword.isEmpty {
+                certificatePassword = WorkspaceCertificatePasswordStore.load()
             }
         }
     }

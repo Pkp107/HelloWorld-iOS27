@@ -2,6 +2,32 @@ import Foundation
 import Combine
 import UniformTypeIdentifiers
 
+enum WorkspaceCertificatePasswordStore {
+    private static let key = "Workspace.CertificatePassword"
+    private static let liveContainerKey = "LCCertificatePassword"
+
+    static func load() -> String {
+#if LIVE_CONTAINER_NATIVE
+        if let password = LCUtils.appGroupUserDefault.string(forKey: liveContainerKey), !password.isEmpty {
+            return password
+        }
+#endif
+        return UserDefaults.standard.string(forKey: key)
+            ?? UserDefaults.standard.string(forKey: liveContainerKey)
+            ?? ""
+    }
+
+    static func save(_ password: String) {
+        let value = password.trimmingCharacters(in: .whitespacesAndNewlines)
+#if LIVE_CONTAINER_NATIVE
+        LCUtils.appGroupUserDefault.set(value, forKey: liveContainerKey)
+#endif
+        UserDefaults.standard.set(value, forKey: key)
+        // Keep the upstream LiveContainer key populated for its native signer.
+        UserDefaults.standard.set(value, forKey: liveContainerKey)
+    }
+}
+
 /// The two inputs the future ZSign adapter will need. The store keeps the
 /// bytes inside the app container so a security-scoped importer URL is never
 /// required after the import flow finishes.
@@ -67,6 +93,7 @@ final class SigningAssetStore: ObservableObject {
     init(fileManager: FileManager = .default) {
         self.fileManager = fileManager
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        migrateLegacyStorageIfNeeded()
         load()
     }
 
@@ -159,6 +186,16 @@ final class SigningAssetStore: ObservableObject {
     private var applicationSupportDirectory: URL {
 #if LIVE_CONTAINER_NATIVE
         if let appGroupPath = LCSharedUtils.appGroupPath() {
+            return appGroupPath.appendingPathComponent("Workspace-iOS27", isDirectory: true)
+        }
+#endif
+        return fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Workspace-iOS27", isDirectory: true)
+    }
+
+    private var legacyApplicationSupportDirectory: URL {
+#if LIVE_CONTAINER_NATIVE
+        if let appGroupPath = LCSharedUtils.appGroupPath() {
             return appGroupPath.appendingPathComponent("Workspace", isDirectory: true)
         }
 #endif
@@ -195,6 +232,21 @@ final class SigningAssetStore: ObservableObject {
             }
         }
         consumeIncomingAssets()
+    }
+
+    private func migrateLegacyStorageIfNeeded() {
+        let oldSigningDirectory = legacyApplicationSupportDirectory
+            .appendingPathComponent("Signing", isDirectory: true)
+        guard fileManager.fileExists(atPath: oldSigningDirectory.path),
+              !fileManager.fileExists(atPath: signingDirectory.path) else { return }
+
+        do {
+            try fileManager.createDirectory(at: applicationSupportDirectory, withIntermediateDirectories: true)
+            try fileManager.moveItem(at: oldSigningDirectory, to: signingDirectory)
+        } catch {
+            // A failed migration is harmless; the old data remains available for a later launch.
+            errorMessage = "Could not migrate signing assets: \(error.localizedDescription)"
+        }
     }
 
     private func consumeIncomingAssets() {

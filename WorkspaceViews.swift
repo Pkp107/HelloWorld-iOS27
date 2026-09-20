@@ -795,6 +795,9 @@ struct SigningAndJITSettingsView: View {
                 if store.settings.jitProvider == .certificate {
                     SecureField("Certificate password", text: $certificatePassword)
                         .textContentType(.password)
+                        .onChange(of: certificatePassword) { _, value in
+                            WorkspaceCertificatePasswordStore.save(value)
+                        }
 #if LIVE_CONTAINER_NATIVE
                     Button("Configure LiveContainer JIT") {
                         configureLiveContainerJIT()
@@ -818,6 +821,11 @@ struct SigningAndJITSettingsView: View {
             }
         }
         .navigationTitle("Certificates and JIT")
+        .onAppear {
+            if certificatePassword.isEmpty {
+                certificatePassword = WorkspaceCertificatePasswordStore.load()
+            }
+        }
         .onChange(of: store.settings) { _, _ in store.settingsDidChange() }
         .fileImporter(
             isPresented: $showingCertificateImporter,
@@ -1066,7 +1074,10 @@ struct IPASignerView: View {
                     )
                     SecureField("Certificate password", text: $certificatePassword)
                         .textContentType(.password)
-                    Text("Signing requires a certificate and profile that match the target device. Files are copied into this app's sandbox; private-key passwords are never stored.")
+                        .onChange(of: certificatePassword) { _, value in
+                            WorkspaceCertificatePasswordStore.save(value)
+                        }
+                    Text("Signing requires a certificate and profile that match the target device. The password is stored locally for future signing and JIT setup.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                     Text("You can share the certificate and profile from Files to Workspace instead of browsing for them here.")
@@ -1090,6 +1101,11 @@ struct IPASignerView: View {
                 }
             }
             .navigationTitle("IPA Signer")
+        }
+        .onAppear {
+            if certificatePassword.isEmpty {
+                certificatePassword = WorkspaceCertificatePasswordStore.load()
+            }
         }
         .fileImporter(
             isPresented: $showingPackageImporter,

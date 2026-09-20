@@ -100,7 +100,7 @@ private struct WorkspaceSigningAssetShareView: View {
                 throw WorkspaceShareError("Workspace shared storage is unavailable.")
             }
             let directory = appGroupPath
-                .appendingPathComponent("Workspace/Signing/Incoming", isDirectory: true)
+                .appendingPathComponent("Workspace-iOS27/Signing/Incoming", isDirectory: true)
                 .appendingPathComponent(kind.rawValue, isDirectory: true)
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             let destination = directory.appendingPathComponent(fileURL.lastPathComponent, isDirectory: false)
