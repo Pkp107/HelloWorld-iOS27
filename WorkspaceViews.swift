@@ -777,6 +777,9 @@ struct SigningAndJITSettingsView: View {
                 Text("These files are shared with IPA Signer. They stay in protected Workspace storage.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+                Text("You can also use Files > Share > Workspace for both signing files.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Certificate JIT") {
@@ -1064,6 +1067,9 @@ struct IPASignerView: View {
                     SecureField("Certificate password", text: $certificatePassword)
                         .textContentType(.password)
                     Text("Signing requires a certificate and profile that match the target device. Files are copied into this app's sandbox; private-key passwords are never stored.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Text("You can share the certificate and profile from Files to Workspace instead of browsing for them here.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                     if let errorMessage = assetStore.errorMessage {

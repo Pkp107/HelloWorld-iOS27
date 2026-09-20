@@ -504,6 +504,9 @@ private struct OnboardingJITPage: View {
                     Text("These signing files are saved once and reused by IPA Signer. The certificate can also configure LiveContainer JIT.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
+                    Text("From Files, share both files to Workspace. They will appear here automatically.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                     if let certificateStatus {
                         Text(certificateStatus)
                             .font(.footnote)

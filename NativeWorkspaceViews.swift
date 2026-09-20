@@ -213,6 +213,9 @@ struct NativeIPASignerView: View {
                     Text("The profile is embedded in the selected IPA before signing. The password is used only for this signing operation and is not saved.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
+                    Text("You can share the certificate and profile from Files to Workspace instead of browsing for them here.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                     if let errorMessage = assetStore.errorMessage {
                         Text(errorMessage)
                             .font(.footnote)

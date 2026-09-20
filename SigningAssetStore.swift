@@ -157,12 +157,23 @@ final class SigningAssetStore: ObservableObject {
     }
 
     private var applicationSupportDirectory: URL {
+#if LIVE_CONTAINER_NATIVE
+        if let appGroupPath = LCSharedUtils.appGroupPath() {
+            return appGroupPath.appendingPathComponent("Workspace", isDirectory: true)
+        }
+#endif
         fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Workspace", isDirectory: true)
     }
 
     private var signingDirectory: URL {
         applicationSupportDirectory.appendingPathComponent("Signing", isDirectory: true)
+    }
+
+    private func incomingDirectory(for kind: SigningAssetKind) -> URL {
+        signingDirectory
+            .appendingPathComponent("Incoming", isDirectory: true)
+            .appendingPathComponent(kind.rawValue, isDirectory: true)
     }
 
     private var manifestURL: URL {
@@ -176,11 +187,59 @@ final class SigningAssetStore: ObservableObject {
     }
 
     private func load() {
-        guard let data = try? Data(contentsOf: manifestURL) else { return }
-        do {
-            assets = try decoder.decode([SigningAsset].self, from: data).filter { url(for: $0) != nil }
-        } catch {
-            errorMessage = "Could not load signing assets: \(error.localizedDescription)"
+        if let data = try? Data(contentsOf: manifestURL) {
+            do {
+                assets = try decoder.decode([SigningAsset].self, from: data).filter { url(for: $0) != nil }
+            } catch {
+                errorMessage = "Could not load signing assets: \(error.localizedDescription)"
+            }
+        }
+        consumeIncomingAssets()
+    }
+
+    private func consumeIncomingAssets() {
+        var didImport = false
+        for kind in SigningAssetKind.allCases {
+            let directory = incomingDirectory(for: kind)
+            guard let files = try? fileManager.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            ) else { continue }
+
+            for sourceURL in files {
+                guard let data = try? Data(contentsOf: sourceURL, options: [.mappedIfSafe]),
+                      !data.isEmpty,
+                      let extensionName = normalizedExtension(for: sourceURL),
+                      kind.expectedExtensions.contains(extensionName) else { continue }
+
+                do {
+                    try fileManager.createDirectory(at: signingDirectory, withIntermediateDirectories: true)
+                    if let previous = asset(for: kind), let previousURL = url(for: previous) {
+                        try? fileManager.removeItem(at: previousURL)
+                    }
+                    let storedName = "\(kind.rawValue)-\(UUID().uuidString).\(extensionName)"
+                    let destinationURL = signingDirectory.appendingPathComponent(storedName, isDirectory: false)
+                    try data.write(to: destinationURL, options: [.atomic])
+                    let imported = SigningAsset(
+                        id: UUID(),
+                        kind: kind,
+                        originalName: sourceURL.lastPathComponent,
+                        storedName: storedName,
+                        byteCount: Int64(data.count),
+                        importedAt: .now
+                    )
+                    assets.removeAll { $0.kind == kind }
+                    assets.append(imported)
+                    try? fileManager.removeItem(at: sourceURL)
+                    didImport = true
+                } catch {
+                    errorMessage = error.localizedDescription
+                }
+            }
+        }
+        if didImport {
+            try? save()
         }
     }
 
