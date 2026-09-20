@@ -270,7 +270,7 @@ private final class InstallerCatalog: ObservableObject {
               url.host != nil, !sources.contains(where: { $0.url.absoluteString == url.absoluteString }) else { return }
         sources.append(CatalogSource(id: url.absoluteString, url: url, name: url.host ?? "Repository", apps: [], status: "Not refreshed"))
         persistSources()
-        refresh(source: sources.last!)
+        refresh(sources.last!)
     }
 
     func remove(at offsets: IndexSet) {
