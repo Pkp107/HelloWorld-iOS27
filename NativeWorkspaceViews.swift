@@ -128,6 +128,7 @@ final class NativeWorkspaceHomeLauncher: NSObject, ObservableObject, LCAppModelD
     }
 }
 
+@MainActor
 enum NativeSigningConfiguration {
     static func configureLiveContainerJIT(
         with assetStore: SigningAssetStore,

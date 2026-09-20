@@ -27,7 +27,7 @@ cp "${ROOT_DIR}/SigningAssetStore.swift" "${SHELL_ROOT}/SigningAssetStore.swift"
 
 # Make ZSign's public Objective-C interface visible to the workspace shell so
 # IPA Signer can sign an IPA selected directly from Files.
-perl -0pi -e 's|(#include "Utilities/LCUtils\\.h")|$1\n#include "../ZSign/zsigner.h"|' "${BUILD_ROOT}/LiveContainerSwiftUI/LiveContainerSwiftUI-Bridging-Header.h"
+perl -0pi -e 's|(#include "Utilities/LCUtils\.h")|$1\n#include "../ZSign/zsigner.h"|' "${BUILD_ROOT}/LiveContainerSwiftUI/LiveContainerSwiftUI-Bridging-Header.h"
 
 # The upstream application remains the native runtime host; only its SwiftUI
 # root is replaced with the workspace shell. All native launch code remains.
