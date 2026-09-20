@@ -89,15 +89,21 @@ jobs:
         run: |
           set -euo pipefail
           app_path="$RUNNER_TEMP/DerivedData/Build/Products/Debug-iphonesimulator/HelloWorld.app"
-          xcrun simctl boot "$SIM_UDID" || true
-          xcrun simctl bootstatus "$SIM_UDID" -b
+          python3 - <<'PY'
+          import os
+          import subprocess
+
+          udid = os.environ["SIM_UDID"]
+          subprocess.run(["xcrun", "simctl", "boot", udid], check=False)
+          subprocess.run(["xcrun", "simctl", "bootstatus", udid, "-b"], check=True, timeout=120)
+          PY
           xcrun simctl install "$SIM_UDID" "$app_path"
           xcrun simctl launch "$SIM_UDID" com.example.helloworld
           sleep 5
           xcrun simctl io "$SIM_UDID" screenshot "$GITHUB_WORKSPACE/HelloWorld-iOS27-simulator.png"
 
       - name: Upload simulator screenshot
-        if: always()
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: HelloWorld-iOS27-simulator-screenshot
