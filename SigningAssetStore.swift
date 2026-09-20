@@ -162,7 +162,7 @@ final class SigningAssetStore: ObservableObject {
             return appGroupPath.appendingPathComponent("Workspace", isDirectory: true)
         }
 #endif
-        fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        return fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Workspace", isDirectory: true)
     }
 
