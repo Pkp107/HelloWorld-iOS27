@@ -2,6 +2,47 @@ import Foundation
 import SwiftUI
 import UniformTypeIdentifiers
 
+enum SystemAppKind: String, Codable, CaseIterable, Hashable {
+    case helloWorld
+    case appLibrary
+    case settings
+    case ipaSigner
+
+    var displayName: String {
+        switch self {
+        case .helloWorld: return "Hello World"
+        case .appLibrary: return "App Library"
+        case .settings: return "Settings"
+        case .ipaSigner: return "IPA Signer"
+        }
+    }
+
+    var iconSymbol: String {
+        switch self {
+        case .helloWorld: return "hand.wave.fill"
+        case .appLibrary: return "square.grid.2x2.fill"
+        case .settings: return "gearshape.fill"
+        case .ipaSigner: return "signature"
+        }
+    }
+
+    var iconColor: String {
+        switch self {
+        case .helloWorld: return "blue"
+        case .appLibrary: return "purple"
+        case .settings: return "gray"
+        case .ipaSigner: return "teal"
+        }
+    }
+
+    var category: String {
+        switch self {
+        case .helloWorld: return "System"
+        case .appLibrary, .settings, .ipaSigner: return "Utilities"
+        }
+    }
+}
+
 enum VirtualAppStatus: String, Codable, CaseIterable {
     case builtIn
     case imported
@@ -16,11 +57,6 @@ enum VirtualAppStatus: String, Codable, CaseIterable {
         case .unsupported: return "Runtime unavailable"
         }
     }
-}
-
-enum RuntimeSessionState: String, Codable {
-    case running
-    case suspended
 }
 
 struct VirtualApp: Identifiable, Codable, Hashable {
@@ -38,19 +74,13 @@ struct VirtualApp: Identifiable, Codable, Hashable {
     var status: VirtualAppStatus
     var addedAt: Date
     var lastOpened: Date?
+    var systemApp: SystemAppKind?
 }
 
 struct VirtualFolder: Identifiable, Codable, Hashable {
     var id: UUID
     var name: String
     var symbol: String
-}
-
-struct RuntimeSession: Identifiable, Codable, Hashable {
-    var id: UUID { appID }
-    var appID: UUID
-    var state: RuntimeSessionState
-    var lastUsed: Date
 }
 
 struct WorkspaceSettings: Codable, Equatable {
@@ -63,31 +93,53 @@ struct WorkspaceSettings: Codable, Equatable {
 private struct WorkspaceSnapshot: Codable {
     var apps: [VirtualApp]
     var folders: [VirtualFolder]
-    var sessions: [RuntimeSession]
     var settings: WorkspaceSettings
+
+    enum CodingKeys: String, CodingKey {
+        case apps
+        case folders
+        case settings
+    }
+
+    init(apps: [VirtualApp], folders: [VirtualFolder], settings: WorkspaceSettings) {
+        self.apps = apps
+        self.folders = folders
+        self.settings = settings
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        apps = try container.decode([VirtualApp].self, forKey: .apps)
+        folders = try container.decode([VirtualFolder].self, forKey: .folders)
+        settings = try container.decode(WorkspaceSettings.self, forKey: .settings)
+    }
 }
 
 @MainActor
 final class WorkspaceStore: ObservableObject {
     @Published private(set) var apps: [VirtualApp]
     @Published private(set) var folders: [VirtualFolder]
-    @Published private(set) var sessions: [RuntimeSession]
     @Published var settings: WorkspaceSettings
     @Published var importError: String?
+    @Published var signingMessage: String?
 
     private let fileManager = FileManager.default
-    private let builtInID = UUID(uuidString: "A7A82D56-1F2C-4B27-9FA9-000000000001")!
+    private let builtInIDs: [SystemAppKind: UUID] = [
+        .helloWorld: UUID(uuidString: "A7A82D56-1F2C-4B27-9FA9-000000000001")!,
+        .appLibrary: UUID(uuidString: "A7A82D56-1F2C-4B27-9FA9-000000000002")!,
+        .settings: UUID(uuidString: "A7A82D56-1F2C-4B27-9FA9-000000000003")!,
+        .ipaSigner: UUID(uuidString: "A7A82D56-1F2C-4B27-9FA9-000000000004")!
+    ]
 
     init() {
         apps = []
         folders = []
-        sessions = []
         settings = WorkspaceSettings()
         load()
     }
 
     var pinnedApps: [VirtualApp] {
-        apps.filter { $0.isPinned && $0.folderID == nil }
+        apps.filter { $0.isPinned && $0.folderID == nil }.sorted { $0.addedAt < $1.addedAt }
     }
 
     var homeApps: [VirtualApp] {
@@ -106,27 +158,8 @@ final class WorkspaceStore: ObservableObject {
     }
 
     func open(_ app: VirtualApp) {
-        if let index = apps.firstIndex(where: { $0.id == app.id }) {
-            apps[index].lastOpened = .now
-        }
-        if let index = sessions.firstIndex(where: { $0.appID == app.id }) {
-            sessions[index].state = .running
-            sessions[index].lastUsed = .now
-        } else {
-            sessions.append(RuntimeSession(appID: app.id, state: .running, lastUsed: .now))
-        }
-        save()
-    }
-
-    func suspend(_ app: VirtualApp) {
-        guard let index = sessions.firstIndex(where: { $0.appID == app.id }) else { return }
-        sessions[index].state = .suspended
-        sessions[index].lastUsed = .now
-        save()
-    }
-
-    func close(_ app: VirtualApp) {
-        sessions.removeAll { $0.appID == app.id }
+        guard let index = apps.firstIndex(where: { $0.id == app.id }) else { return }
+        apps[index].lastOpened = .now
         save()
     }
 
@@ -166,12 +199,19 @@ final class WorkspaceStore: ObservableObject {
                 folderID: nil,
                 status: .imported,
                 addedAt: .now,
-                lastOpened: nil
+                lastOpened: nil,
+                systemApp: nil
             ))
             save()
         } catch {
             importError = "Could not import \(url.lastPathComponent): \(error.localizedDescription)"
         }
+    }
+
+    func ipaURL(for app: VirtualApp) -> URL? {
+        guard let fileName = app.ipaFileName else { return nil }
+        let url = importsDirectory.appendingPathComponent(fileName)
+        return fileManager.fileExists(atPath: url.path) ? url : nil
     }
 
     func remove(_ app: VirtualApp) {
@@ -180,7 +220,6 @@ final class WorkspaceStore: ObservableObject {
             try? fileManager.removeItem(at: importsDirectory.appendingPathComponent(fileName))
         }
         apps.removeAll { $0.id == app.id }
-        sessions.removeAll { $0.appID == app.id }
         save()
     }
 
@@ -206,10 +245,10 @@ final class WorkspaceStore: ObservableObject {
     }
 
     func resetWorkspace() {
-        apps = [Self.seedHelloWorld(id: builtInID)]
+        apps = Self.seedSystemApps(ids: builtInIDs)
         folders = []
-        sessions = []
         settings = WorkspaceSettings()
+        signingMessage = nil
         save()
     }
 
@@ -217,9 +256,22 @@ final class WorkspaceStore: ObservableObject {
         save()
     }
 
+    func prepareSigning(for app: VirtualApp, certificateName: String, profileName: String) {
+        guard ipaURL(for: app) != nil else {
+            signingMessage = "The IPA is no longer available in app storage. Import it again before signing."
+            return
+        }
+        guard !certificateName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !profileName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            signingMessage = "Choose a signing certificate and provisioning profile."
+            return
+        }
+        signingMessage = "Signing configuration saved for \(app.displayName). A native ZSign backend must be linked before an IPA can be exported."
+    }
+
     private var applicationSupportDirectory: URL {
         fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("HelloOS", isDirectory: true)
+            .appendingPathComponent("Workspace", isDirectory: true)
     }
 
     private var importsDirectory: URL {
@@ -230,30 +282,64 @@ final class WorkspaceStore: ObservableObject {
         applicationSupportDirectory.appendingPathComponent("workspace.json")
     }
 
+    private var legacyApplicationSupportDirectory: URL {
+        fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("HelloOS", isDirectory: true)
+    }
+
     private func load() {
         do {
+            try migrateLegacyWorkspaceIfNeeded()
             let data = try Data(contentsOf: stateURL)
             let snapshot = try JSONDecoder().decode(WorkspaceSnapshot.self, from: data)
             apps = snapshot.apps
             folders = snapshot.folders
-            sessions = snapshot.sessions
             settings = snapshot.settings
-            if !apps.contains(where: { $0.id == builtInID }) {
-                apps.insert(Self.seedHelloWorld(id: builtInID), at: 0)
-            }
+            ensureSystemApps()
         } catch {
-            apps = [Self.seedHelloWorld(id: builtInID)]
+            apps = Self.seedSystemApps(ids: builtInIDs)
             folders = []
-            sessions = []
             settings = WorkspaceSettings()
             save()
         }
     }
 
+    private func migrateLegacyWorkspaceIfNeeded() throws {
+        guard !fileManager.fileExists(atPath: stateURL.path),
+              fileManager.fileExists(atPath: legacyApplicationSupportDirectory.path) else { return }
+        try fileManager.createDirectory(at: applicationSupportDirectory.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try fileManager.copyItem(at: legacyApplicationSupportDirectory, to: applicationSupportDirectory)
+    }
+
+    private func ensureSystemApps() {
+        var changed = false
+        for kind in SystemAppKind.allCases {
+            let expectedID = builtInIDs[kind]
+            if let index = apps.firstIndex(where: { $0.id == expectedID || $0.systemApp == kind }) {
+                if apps[index].systemApp != kind {
+                    apps[index].systemApp = kind
+                    changed = true
+                }
+                if !apps[index].isBuiltIn {
+                    apps[index].isBuiltIn = true
+                    changed = true
+                }
+                if apps[index].status != .builtIn {
+                    apps[index].status = .builtIn
+                    changed = true
+                }
+            } else if let expectedID {
+                apps.append(Self.seedSystemApp(kind: kind, id: expectedID))
+                changed = true
+            }
+        }
+        if changed { save() }
+    }
+
     private func save() {
         do {
             try fileManager.createDirectory(at: applicationSupportDirectory, withIntermediateDirectories: true)
-            let snapshot = WorkspaceSnapshot(apps: apps, folders: folders, sessions: sessions, settings: settings)
+            let snapshot = WorkspaceSnapshot(apps: apps, folders: folders, settings: settings)
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             try encoder.encode(snapshot).write(to: stateURL, options: .atomic)
@@ -262,22 +348,30 @@ final class WorkspaceStore: ObservableObject {
         }
     }
 
-    private static func seedHelloWorld(id: UUID) -> VirtualApp {
+    private static func seedSystemApps(ids: [SystemAppKind: UUID]) -> [VirtualApp] {
+        SystemAppKind.allCases.compactMap { kind in
+            guard let id = ids[kind] else { return nil }
+            return seedSystemApp(kind: kind, id: id)
+        }
+    }
+
+    private static func seedSystemApp(kind: SystemAppKind, id: UUID) -> VirtualApp {
         VirtualApp(
             id: id,
-            displayName: "Hello World",
-            bundleIdentifier: "com.example.helloworld",
+            displayName: kind.displayName,
+            bundleIdentifier: "com.example.workspace.\(kind.rawValue)",
             version: "1.0",
-            iconSymbol: "hand.wave.fill",
-            iconColor: "blue",
-            category: "System",
+            iconSymbol: kind.iconSymbol,
+            iconColor: kind.iconColor,
+            category: kind.category,
             ipaFileName: nil,
             isBuiltIn: true,
             isPinned: true,
             folderID: nil,
             status: .builtIn,
             addedAt: .now,
-            lastOpened: nil
+            lastOpened: nil,
+            systemApp: kind
         )
     }
 }
@@ -293,6 +387,7 @@ extension Color {
         case "red": return .red
         case "indigo": return .indigo
         case "teal": return .teal
+        case "gray": return .gray
         default: return .blue
         }
     }

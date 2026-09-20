@@ -1,25 +1,25 @@
-# Hello World for iOS 27
+# Workspace for iOS 27
 
-HelloOS is a SwiftUI workspace shell for iOS 27. It has a home screen, dock, folders, searchable app library, task-switcher-style sessions, settings, IPA import/storage, editable app metadata, and a built-in Hello World app. It uses system colors, Dynamic Type, safe-area-aware layout, and accessible 44pt controls.
+Workspace is a SwiftUI home screen compiled with the iOS 27 SDK. It includes a dock, folders, separate built-in App Library, Settings, and IPA Signer apps, IPA import and metadata management, and a built-in Hello World app. Apps open as full-screen surfaces with an edge home bar: on the right in portrait and on the left in landscape. The bar can be tapped or swiped.
 
 ## Build the IPA with GitHub Actions
 
-1. Create a GitHub repository and upload the contents of this folder.
+1. Push this repository to GitHub.
 2. Push to `main`, or open **Actions > Build iOS 27 IPA > Run workflow**.
 3. Download the `HelloWorld-iOS27-unsigned-ipa` artifact.
 4. Send the `.ipa` to the iPhone with LocalSend.
-5. Import it into FlekStore and use FlekStore's supported signing/install flow.
+5. Import it into FlekStore and use FlekStore's supported signing and install flow.
 
-The workflow intentionally creates an **unsigned** IPA. A normal iPhone will not install an unsigned app directly; FlekStore must sign it or use a compatible installation method. GitHub Actions only builds the package.
+The workflow creates an **unsigned** IPA. GitHub Actions only builds the package; an iPhone still needs a compatible signing and installation method.
 
-## LiveContainer runtime status
+## LiveContainer status
 
-The current HelloOS target manages imported IPAs and represents them in the workspace and task switcher. It does not execute guest IPAs yet. LiveContainer's execution layer is a native multi-target architecture that includes a bootstrap executable, `LiveContainerShared.framework`, loader and process extensions, Mach-O patching, dyld hooks, app-group entitlements, and device-specific signing/JIT paths. Those targets must be integrated as a separate native milestone; a SwiftUI screen alone cannot provide that runtime.
+The app now has a `LiveContainerRuntimeBridge` boundary and reports the stored IPA, signing state, and native framework availability in the UI. The current target does not claim to execute imported IPAs. Upstream LiveContainer execution is a native multi-target system that includes a bootstrap executable, `LiveContainerShared.framework`, loader and process extensions, Mach-O patching, dyld hooks, app-group entitlements, and device-specific signing or JIT paths. Those targets are not vendored into this small SwiftUI target, so imported IPAs remain managed files until that native adapter is linked.
 
-The upstream LiveContainer project is AGPLv3. This repository does not currently copy its source. If its code is integrated or the repository is distributed with a modified combined runtime, retain the upstream license and source obligations.
+The IPA Signer app provides the certificate and provisioning-profile workflow and validates that an imported IPA is present. It intentionally reports that export needs a native ZSign backend; selecting assets in the UI does not falsely produce a signed IPA.
 
-## About the iOS 27 target
+LiveContainer is AGPLv3. If its source is integrated into this public repository, preserve the upstream license and corresponding source obligations.
 
-The iOS version used to compile the app comes from the Xcode SDK installed on GitHub's `xcode-27` macOS runner. The workflow checks that `xcrun` reports an `iphoneos` SDK beginning with `27.` and fails with the available SDK list if it does not. The deployment target remains iOS 18 so the app can run on supported devices while being compiled with the iOS 27 SDK.
+## iOS 27 target
 
-The simulator-build job compiles the app for `iphonesimulator` and uploads the resulting `.app` bundle. GitHub's Xcode 27 preview runner does not currently boot its simulator runtime reliably, so live launch and screenshot testing needs a Mac/Xcode session.
+The workflow checks that the GitHub `xcode-27` runner exposes an `iphoneos` SDK beginning with `27.`. The deployment target remains iOS 18 so the build can run on supported devices while using the iOS 27 SDK. A second job compiles the app for an iOS 27 simulator and uploads the `.app` bundle.

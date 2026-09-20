@@ -3,12 +3,11 @@ import SwiftUI
 struct AppLibraryView: View {
     @ObservedObject var store: WorkspaceStore
     let onOpen: (VirtualApp) -> Void
-    let onImport: () -> Void
-    @Environment(\.dismiss) private var dismiss
     @State private var searchText = ""
     @State private var showingFolderPrompt = false
     @State private var newFolderName = ""
     @State private var editingApp: VirtualApp?
+    @State private var showingImporter = false
 
     private var filteredApps: [VirtualApp] {
         guard !searchText.isEmpty else { return store.apps }
@@ -51,15 +50,11 @@ struct AppLibraryView: View {
                 }
             }
             .searchable(text: $searchText, prompt: "Search apps")
-            .navigationTitle("App library")
+            .navigationTitle("App Library")
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Done") { dismiss() }
-                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
-                        dismiss()
-                        DispatchQueue.main.async(execute: onImport)
+                        showingImporter = true
                     } label: {
                         Image(systemName: "tray.and.arrow.down")
                     }
@@ -78,7 +73,27 @@ struct AppLibraryView: View {
             }
             Button("Cancel", role: .cancel) { newFolderName = "" }
         } message: {
-            Text("Group apps on your HelloOS home screen.")
+            Text("Group apps on the Home screen.")
+        }
+        .fileImporter(
+            isPresented: $showingImporter,
+            allowedContentTypes: [.ipa, .zip, .data],
+            allowsMultipleSelection: false
+        ) { result in
+            switch result {
+            case .success(let urls):
+                if let url = urls.first { store.importIPA(from: url) }
+            case .failure(let error):
+                store.importError = error.localizedDescription
+            }
+        }
+        .alert("Import problem", isPresented: Binding(
+            get: { store.importError != nil },
+            set: { if !$0 { store.importError = nil } }
+        )) {
+            Button("OK", role: .cancel) { store.importError = nil }
+        } message: {
+            Text(store.importError ?? "")
         }
     }
 }
@@ -158,7 +173,7 @@ struct AppDetailsView: View {
                     TextField("Category", text: $category)
                     TextField("SF Symbol", text: $icon)
                     Picker("Accent", selection: $color) {
-                        ForEach(["blue", "teal", "green", "orange", "purple", "pink", "red", "indigo"], id: \.self) { value in
+                        ForEach(["blue", "teal", "green", "orange", "purple", "pink", "red", "indigo", "gray"], id: \.self) { value in
                             Text(value.capitalized).tag(value)
                         }
                     }
@@ -211,7 +226,7 @@ struct FolderView: View {
                     .foregroundStyle(.primary)
                 }
                 if store.apps(in: folder).isEmpty {
-                    ContentUnavailableView("Empty folder", systemImage: "folder", description: Text("Move apps here from the library."))
+                    ContentUnavailableView("Empty folder", systemImage: "folder", description: Text("Move apps here from App Library."))
                 }
             }
             .navigationTitle(folder.name)
@@ -224,94 +239,21 @@ struct FolderView: View {
     }
 }
 
-struct TaskSwitcherView: View {
-    @ObservedObject var store: WorkspaceStore
-    let onOpen: (VirtualApp) -> Void
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        NavigationStack {
-            Group {
-                if store.sessions.isEmpty {
-                    ContentUnavailableView("No open apps", systemImage: "rectangle.stack", description: Text("Open an app from the HelloOS workspace to see it here."))
-                } else {
-                    ScrollView(.horizontal) {
-                        LazyHStack(spacing: 16) {
-                            ForEach(store.sessions) { session in
-                                if let app = store.app(for: session.appID) {
-                                    TaskCard(app: app, session: session, onOpen: { onOpen(app) }, onClose: { store.close(app) })
-                                }
-                            }
-                        }
-                        .padding(.horizontal, 20)
-                    }
-                }
-            }
-            .navigationTitle("Task switcher")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") { dismiss() }
-                }
-            }
-        }
-    }
-}
-
-private struct TaskCard: View {
-    let app: VirtualApp
-    let session: RuntimeSession
-    let onOpen: () -> Void
-    let onClose: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Image(systemName: app.iconSymbol)
-                    .font(.title2.weight(.semibold))
-                    .foregroundStyle(Color.workspaceAccent(app.iconColor))
-                Spacer()
-                Button(action: onClose) {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.title3)
-                        .foregroundStyle(.secondary)
-                        .frame(width: 44, height: 44)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Close \(app.displayName)")
-            }
-            Spacer(minLength: 0)
-            Text(app.displayName)
-                .font(.title3.weight(.bold))
-            Label(session.state == .running ? "Open" : "Suspended", systemImage: session.state == .running ? "circle.fill" : "pause.circle")
-                .font(.subheadline)
-                .foregroundStyle(session.state == .running ? Color.green : Color.secondary)
-            Button("Resume", action: onOpen)
-                .buttonStyle(.borderedProminent)
-                .frame(minHeight: 44)
-        }
-        .padding(18)
-        .frame(width: 250, height: 230)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(.separator))
-    }
-}
-
 struct SettingsView: View {
     @ObservedObject var store: WorkspaceStore
-    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
             Form {
-                Section("Workspace") {
+                Section("Home") {
                     Toggle("Show app labels", isOn: $store.settings.showAppLabels)
                     Stepper("Home columns: \(store.settings.gridColumns)", value: $store.settings.gridColumns, in: 2...5)
                     Toggle("Confirm app removal", isOn: $store.settings.confirmRemoval)
-                    Toggle("Reduce shell motion", isOn: $store.settings.reduceShellMotion)
+                    Toggle("Reduce motion", isOn: $store.settings.reduceShellMotion)
                 }
-                Section("Runtime") {
-                    Label("LiveContainer bridge", systemImage: "bolt.horizontal.circle")
-                    Text("The UI is ready for the native LiveContainer targets. Guest IPA execution requires its bootstrap, loader, extensions, entitlements, and signing/JIT setup.")
+                Section("LiveContainer") {
+                    Label(LiveContainerRuntime.shared.availability.label, systemImage: "bolt.horizontal.circle")
+                    Text("The workspace keeps imported IPAs in app-owned storage. Full guest execution requires the upstream native bootstrap, loader, extensions, entitlements, and signing or JIT path.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -322,14 +264,93 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("Settings")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") { dismiss() }
-                }
-            }
             .onChange(of: store.settings) { _, _ in
                 store.settingsDidChange()
             }
+        }
+    }
+}
+
+struct IPASignerView: View {
+    @ObservedObject var store: WorkspaceStore
+    @State private var selectedAppID: UUID?
+    @State private var certificateName = ""
+    @State private var profileName = ""
+    @State private var showingCertificateImporter = false
+    @State private var showingProfileImporter = false
+
+    private var importedApps: [VirtualApp] {
+        store.apps.filter { !$0.isBuiltIn }
+    }
+
+    private var selectedApp: VirtualApp? {
+        importedApps.first(where: { $0.id == selectedAppID })
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    if importedApps.isEmpty {
+                        ContentUnavailableView("No IPA files", systemImage: "shippingbox", description: Text("Import an IPA from App Library first."))
+                    } else {
+                        Picker("IPA", selection: $selectedAppID) {
+                            Text("Choose an app").tag(UUID?.none)
+                            ForEach(importedApps) { app in
+                                Text(app.displayName).tag(Optional(app.id))
+                            }
+                        }
+                    }
+                } header: {
+                    Text("Package")
+                }
+
+                Section("Signing assets") {
+                    Button {
+                        showingCertificateImporter = true
+                    } label: {
+                        LabeledContent("Certificate", value: certificateName.isEmpty ? "Choose .p12" : certificateName)
+                    }
+                    Button {
+                        showingProfileImporter = true
+                    } label: {
+                        LabeledContent("Provisioning profile", value: profileName.isEmpty ? "Choose .mobileprovision" : profileName)
+                    }
+                    Text("Signing requires a certificate and profile that match the target device. Assets stay inside this app's sandbox.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
+                Section {
+                    Button("Prepare signed IPA") {
+                        if let selectedApp {
+                            store.prepareSigning(for: selectedApp, certificateName: certificateName, profileName: profileName)
+                        }
+                    }
+                    .frame(minHeight: 44)
+                    .disabled(selectedApp == nil || certificateName.isEmpty || profileName.isEmpty)
+                } footer: {
+                    Text("The current build exposes the signing workflow and validation surface. A native ZSign backend must be linked before it can export a signed IPA.")
+                }
+            }
+            .navigationTitle("IPA Signer")
+        }
+        .onAppear {
+            if selectedAppID == nil { selectedAppID = importedApps.first?.id }
+        }
+        .fileImporter(isPresented: $showingCertificateImporter, allowedContentTypes: [.data], allowsMultipleSelection: false) { result in
+            if case .success(let urls) = result { certificateName = urls.first?.lastPathComponent ?? "" }
+        }
+        .fileImporter(isPresented: $showingProfileImporter, allowedContentTypes: [.data], allowsMultipleSelection: false) { result in
+            if case .success(let urls) = result { profileName = urls.first?.lastPathComponent ?? "" }
+        }
+        .alert("Signing", isPresented: Binding(
+            get: { store.signingMessage != nil },
+            set: { if !$0 { store.signingMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) { store.signingMessage = nil }
+        } message: {
+            Text(store.signingMessage ?? "")
         }
     }
 }
