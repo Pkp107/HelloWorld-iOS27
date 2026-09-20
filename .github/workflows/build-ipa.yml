@@ -1,0 +1,53 @@
+name: Build iOS 27 IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    # GitHub's Xcode 27 preview image provides the iOS 27 SDK.
+    runs-on: xcode-27
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Select Xcode with iOS 27 SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdk_path="$(xcrun --sdk iphoneos --show-sdk-path)"
+          sdk_version="$(xcrun --sdk iphoneos --show-sdk-version)"
+          echo "Using ${sdk_path} (iOS SDK ${sdk_version})"
+          if [[ "${sdk_version}" != 27.* ]]; then
+            echo "This runner does not have an iOS 27 SDK. Choose a GitHub macOS image/Xcode version that provides it." >&2
+            xcodebuild -showsdks
+            exit 1
+          fi
+
+      - name: Build unsigned archive
+        run: |
+          xcodebuild archive \
+            -project HelloWorld.xcodeproj \
+            -target HelloWorld \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/HelloWorld.xcarchive" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO
+
+      - name: Package unsigned IPA
+        run: |
+          set -euo pipefail
+          app_path="$RUNNER_TEMP/HelloWorld.xcarchive/Products/Applications/HelloWorld.app"
+          mkdir -p "$RUNNER_TEMP/ipa/Payload"
+          cp -R "$app_path" "$RUNNER_TEMP/ipa/Payload/HelloWorld.app"
+          (cd "$RUNNER_TEMP/ipa" && zip -qry "$GITHUB_WORKSPACE/HelloWorld-iOS27-unsigned.ipa" Payload)
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: HelloWorld-iOS27-unsigned-ipa
+          path: HelloWorld-iOS27-unsigned.ipa
