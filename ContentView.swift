@@ -525,10 +525,15 @@ private struct OnboardingJITPage: View {
             allowedContentTypes: SigningAssetKind.certificate.fileImporterContentTypes,
             allowsMultipleSelection: false
         ) { result in
-            if case .success(let urls) = result, let url = urls.first {
-                if assetStore.importAsset(from: url, kind: .certificate), !certificatePassword.isEmpty {
+            switch result {
+            case .success(let urls):
+                if let url = urls.first,
+                   assetStore.importAsset(from: url, kind: .certificate),
+                   !certificatePassword.isEmpty {
                     configureLiveContainerJIT()
                 }
+            case .failure(let error):
+                assetStore.errorMessage = error.localizedDescription
             }
         }
         .fileImporter(
@@ -536,8 +541,11 @@ private struct OnboardingJITPage: View {
             allowedContentTypes: SigningAssetKind.provisioningProfile.fileImporterContentTypes,
             allowsMultipleSelection: false
         ) { result in
-            if case .success(let urls) = result, let url = urls.first {
-                assetStore.importAsset(from: url, kind: .provisioningProfile)
+            switch result {
+            case .success(let urls):
+                if let url = urls.first { assetStore.importAsset(from: url, kind: .provisioningProfile) }
+            case .failure(let error):
+                assetStore.errorMessage = error.localizedDescription
             }
         }
     }

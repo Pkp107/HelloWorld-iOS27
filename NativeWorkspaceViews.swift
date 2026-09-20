@@ -213,6 +213,11 @@ struct NativeIPASignerView: View {
                     Text("The profile is embedded in the selected IPA before signing. The password is used only for this signing operation and is not saved.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
+                    if let errorMessage = assetStore.errorMessage {
+                        Text(errorMessage)
+                            .font(.footnote)
+                            .foregroundStyle(.red)
+                    }
                 }
 
                 Section {
@@ -260,8 +265,11 @@ struct NativeIPASignerView: View {
             allowedContentTypes: SigningAssetKind.certificate.fileImporterContentTypes,
             allowsMultipleSelection: false
         ) { result in
-            if case .success(let urls) = result, let url = urls.first {
-                _ = assetStore.importAsset(from: url, kind: .certificate)
+            switch result {
+            case .success(let urls):
+                if let url = urls.first { _ = assetStore.importAsset(from: url, kind: .certificate) }
+            case .failure(let error):
+                assetStore.errorMessage = error.localizedDescription
             }
         }
         .fileImporter(
@@ -269,8 +277,11 @@ struct NativeIPASignerView: View {
             allowedContentTypes: SigningAssetKind.provisioningProfile.fileImporterContentTypes,
             allowsMultipleSelection: false
         ) { result in
-            if case .success(let urls) = result, let url = urls.first {
-                _ = assetStore.importAsset(from: url, kind: .provisioningProfile)
+            switch result {
+            case .success(let urls):
+                if let url = urls.first { _ = assetStore.importAsset(from: url, kind: .provisioningProfile) }
+            case .failure(let error):
+                assetStore.errorMessage = error.localizedDescription
             }
         }
     }

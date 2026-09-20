@@ -29,22 +29,11 @@ enum SigningAssetKind: String, Codable, CaseIterable, Identifiable {
         }
     }
 
-    /// Explicit document types keep the Files picker from treating signing
-    /// inputs as an unknown generic data file. Some providers only enable the
-    /// row when they receive the extension-backed type.
+    /// Files providers frequently expose signing inputs as generic data even
+    /// when the filename has a known extension. Accept generic data here and
+    /// validate the extension after the security-scoped URL is returned.
     var fileImporterContentTypes: [UTType] {
-        switch self {
-        case .certificate:
-            return [
-                UTType(filenameExtension: "p12") ?? .data,
-                UTType(filenameExtension: "pfx") ?? .data
-            ]
-        case .provisioningProfile:
-            return [
-                UTType(filenameExtension: "mobileprovision") ?? .data,
-                UTType(filenameExtension: "provisionprofile") ?? .data
-            ]
-        }
+        [.data]
     }
 }
 

@@ -821,8 +821,11 @@ struct SigningAndJITSettingsView: View {
             allowedContentTypes: SigningAssetKind.certificate.fileImporterContentTypes,
             allowsMultipleSelection: false
         ) { result in
-            if case .success(let urls) = result, let url = urls.first {
-                _ = assetStore.importAsset(from: url, kind: .certificate)
+            switch result {
+            case .success(let urls):
+                if let url = urls.first { _ = assetStore.importAsset(from: url, kind: .certificate) }
+            case .failure(let error):
+                assetStore.errorMessage = error.localizedDescription
             }
         }
         .fileImporter(
@@ -830,8 +833,11 @@ struct SigningAndJITSettingsView: View {
             allowedContentTypes: SigningAssetKind.provisioningProfile.fileImporterContentTypes,
             allowsMultipleSelection: false
         ) { result in
-            if case .success(let urls) = result, let url = urls.first {
-                _ = assetStore.importAsset(from: url, kind: .provisioningProfile)
+            switch result {
+            case .success(let urls):
+                if let url = urls.first { _ = assetStore.importAsset(from: url, kind: .provisioningProfile) }
+            case .failure(let error):
+                assetStore.errorMessage = error.localizedDescription
             }
         }
     }
@@ -1089,13 +1095,19 @@ struct IPASignerView: View {
             }
         }
         .fileImporter(isPresented: $showingCertificateImporter, allowedContentTypes: SigningAssetKind.certificate.fileImporterContentTypes, allowsMultipleSelection: false) { result in
-            if case .success(let urls) = result, let url = urls.first {
-                _ = assetStore.importAsset(from: url, kind: .certificate)
+            switch result {
+            case .success(let urls):
+                if let url = urls.first { _ = assetStore.importAsset(from: url, kind: .certificate) }
+            case .failure(let error):
+                assetStore.errorMessage = error.localizedDescription
             }
         }
         .fileImporter(isPresented: $showingProfileImporter, allowedContentTypes: SigningAssetKind.provisioningProfile.fileImporterContentTypes, allowsMultipleSelection: false) { result in
-            if case .success(let urls) = result, let url = urls.first {
-                _ = assetStore.importAsset(from: url, kind: .provisioningProfile)
+            switch result {
+            case .success(let urls):
+                if let url = urls.first { _ = assetStore.importAsset(from: url, kind: .provisioningProfile) }
+            case .failure(let error):
+                assetStore.errorMessage = error.localizedDescription
             }
         }
         .alert("IPA Signer", isPresented: Binding(
