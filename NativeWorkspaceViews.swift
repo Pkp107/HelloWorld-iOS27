@@ -67,6 +67,11 @@ struct NativeLiveContainerHomeGrid: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel(app.displayName)
                 .accessibilityHint("Opens LiveContainer app")
+                .contextMenu {
+                    Button("Remove app", role: .destructive) {
+                        launcher.remove(app)
+                    }
+                }
             }
         }
         .alert("Could not open app", isPresented: Binding(
@@ -92,6 +97,19 @@ final class NativeWorkspaceHomeLauncher: NSObject, ObservableObject, LCAppModelD
             } catch {
                 errorMessage = error.localizedDescription
             }
+        }
+    }
+
+    func remove(_ app: LCAppModel) {
+        let root = app.appInfo.isShared ? LCPath.lcGroupBundlePath : LCPath.bundlePath
+        guard let relativePath = app.appInfo.relativeBundlePath else { return }
+        let appURL = root.appendingPathComponent(relativePath, isDirectory: true)
+        do {
+            try FileManager.default.removeItem(at: appURL)
+            DataManager.shared.model.apps.removeAll { $0 == app }
+            DataManager.shared.model.hiddenApps.removeAll { $0 == app }
+        } catch {
+            errorMessage = "Could not remove \(app.displayName): \(error.localizedDescription)"
         }
     }
 

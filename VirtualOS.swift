@@ -16,9 +16,10 @@ enum SystemAppKind: String, Codable, CaseIterable, Hashable {
     case installer
     case liveContainer
     case liveContainerSettings
+    case fileManager
 
     static var allCases: [SystemAppKind] {
-        [.helloWorld, .settings, .installer, .liveContainer]
+        [.helloWorld, .settings, .installer, .fileManager]
     }
 
     init(from decoder: Decoder) throws {
@@ -51,6 +52,7 @@ enum SystemAppKind: String, Codable, CaseIterable, Hashable {
         case .installer: return "Installer"
         case .liveContainer: return "LiveContainer"
         case .liveContainerSettings: return "LiveContainer Settings"
+        case .fileManager: return "File Manager"
         }
     }
 
@@ -63,6 +65,7 @@ enum SystemAppKind: String, Codable, CaseIterable, Hashable {
         case .installer: return "arrow.down.app.fill"
         case .liveContainer: return "shippingbox.and.arrow.backward.fill"
         case .liveContainerSettings: return "bolt.circle.fill"
+        case .fileManager: return "folder.fill"
         }
     }
 
@@ -75,13 +78,14 @@ enum SystemAppKind: String, Codable, CaseIterable, Hashable {
         case .installer: return "orange"
         case .liveContainer: return "green"
         case .liveContainerSettings: return "indigo"
+        case .fileManager: return "teal"
         }
     }
 
     var category: String {
         switch self {
         case .helloWorld: return "System"
-        case .appLibrary, .settings, .ipaSigner, .installer, .liveContainer, .liveContainerSettings: return "Utilities"
+        case .appLibrary, .settings, .ipaSigner, .installer, .liveContainer, .liveContainerSettings, .fileManager: return "Utilities"
         }
     }
 }
@@ -345,7 +349,8 @@ final class WorkspaceStore: ObservableObject {
         .installer: UUID(uuidString: "A7A82D56-1F2C-4B27-9FA9-000000000005")!,
         // Reuse the old App Library identifier so migration maps that app in
         // place instead of adding a duplicate LiveContainer icon.
-        .liveContainer: UUID(uuidString: "A7A82D56-1F2C-4B27-9FA9-000000000002")!
+        .liveContainer: UUID(uuidString: "A7A82D56-1F2C-4B27-9FA9-000000000002")!,
+        .fileManager: UUID(uuidString: "A7A82D56-1F2C-4B27-9FA9-000000000007")!
     ]
 
     init() {
@@ -783,7 +788,7 @@ final class WorkspaceStore: ObservableObject {
         let retiredID = UUID(uuidString: "A7A82D56-1F2C-4B27-9FA9-000000000006")!
         let oldCount = apps.count
         apps.removeAll {
-            $0.id == retiredID || $0.systemApp == .liveContainerSettings || $0.systemApp == .ipaSigner
+            $0.id == retiredID || $0.systemApp == .liveContainerSettings || $0.systemApp == .ipaSigner || $0.systemApp == .liveContainer
         }
         if apps.count != oldCount { save() }
     }

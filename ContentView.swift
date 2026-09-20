@@ -6,6 +6,7 @@ struct ContentView: View {
     @State private var activeApp: VirtualApp?
     @State private var folder: VirtualFolder?
     @State private var showingOnboarding = false
+    @State private var pendingRemoval: VirtualApp?
 
     private var launcherApps: [VirtualApp] {
         // Workspace-owned tools always stay on the launcher. The native build
@@ -40,6 +41,7 @@ struct ContentView: View {
                             columns: store.settings.gridColumns,
                             showLabels: store.settings.showAppLabels,
                             onOpenApp: open,
+                            onRemoveApp: requestRemoval,
                             onOpenFolder: { folder = $0 }
                         )
 #if LIVE_CONTAINER_NATIVE
@@ -94,12 +96,29 @@ struct ContentView: View {
         } message: {
             Text(store.importError ?? "")
         }
+        .alert(item: $pendingRemoval) { app in
+            Alert(
+                title: Text("Remove \(app.displayName)?"),
+                message: Text("This removes the app from the Workspace home screen and deletes its stored IPA."),
+                primaryButton: .destructive(Text("Remove")) { store.remove(app) },
+                secondaryButton: .cancel()
+            )
+        }
     }
 
     private func open(_ app: VirtualApp) {
         store.open(app)
         folder = nil
         activeApp = app
+    }
+
+    private func requestRemoval(_ app: VirtualApp) {
+        guard !app.isBuiltIn else { return }
+        if store.settings.confirmRemoval {
+            pendingRemoval = app
+        } else {
+            store.remove(app)
+        }
     }
 }
 
@@ -125,6 +144,7 @@ private struct HomeGrid: View {
     let columns: Int
     let showLabels: Bool
     let onOpenApp: (VirtualApp) -> Void
+    let onRemoveApp: (VirtualApp) -> Void
     let onOpenFolder: (VirtualFolder) -> Void
 
     private var gridColumns: [GridItem] {
@@ -134,7 +154,12 @@ private struct HomeGrid: View {
     var body: some View {
         LazyVGrid(columns: gridColumns, alignment: .leading, spacing: 22) {
             ForEach(apps) { app in
-                AppIconButton(app: app, showLabel: showLabels, action: { onOpenApp(app) })
+                AppIconButton(
+                    app: app,
+                    showLabel: showLabels,
+                    action: { onOpenApp(app) },
+                    onRemove: app.isBuiltIn ? nil : { onRemoveApp(app) }
+                )
             }
             ForEach(folders) { folder in
                 FolderIconButton(folder: folder, showLabel: showLabels, action: { onOpenFolder(folder) })
@@ -147,6 +172,7 @@ private struct AppIconButton: View {
     let app: VirtualApp
     let showLabel: Bool
     let action: () -> Void
+    let onRemove: (() -> Void)?
 
     var body: some View {
         Button(action: action) {
@@ -170,6 +196,11 @@ private struct AppIconButton: View {
         .buttonStyle(.plain)
         .accessibilityLabel(app.displayName)
         .accessibilityHint(app.isBuiltIn ? "Opens app" : "Opens imported app status")
+        .contextMenu {
+            if let onRemove {
+                Button("Remove app", role: .destructive, action: onRemove)
+            }
+        }
     }
 }
 
@@ -269,7 +300,9 @@ struct RuntimeWindow: View {
         case .installer:
             InstallerView(store: store, onOpen: onOpen)
         case .liveContainer:
-            LiveContainerAppsView(store: store, onOpen: onOpen)
+            InstallerView(store: store, onOpen: onOpen)
+        case .fileManager:
+            WorkspaceFileManagerView(store: store)
         case .liveContainerSettings:
             // Kept only so an app record from an older workspace build can
             // still open. New launchers expose these controls inside Settings.

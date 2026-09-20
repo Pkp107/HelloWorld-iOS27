@@ -9,7 +9,645 @@ struct InstallerView: View {
     let onOpen: (VirtualApp) -> Void
 
     var body: some View {
-        CombinedInstallerView(store: store, onOpen: onOpen)
+        AppStoreInstallerView(store: store, onOpen: onOpen)
+    }
+}
+
+private enum InstallerSection: String, CaseIterable, Identifiable {
+    case store
+    case repositories
+    case installed
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .store: return "Store"
+        case .repositories: return "Repos"
+        case .installed: return "Installed"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .store: return "bag.fill"
+        case .repositories: return "server.rack"
+        case .installed: return "square.stack.3d.up.fill"
+        }
+    }
+}
+
+private struct AppStoreInstallerView: View {
+    @ObservedObject var store: WorkspaceStore
+    let onOpen: (VirtualApp) -> Void
+    @StateObject private var catalog = InstallerCatalog()
+    @State private var section = InstallerSection.store
+    @State private var selectedApp: CatalogApp?
+
+    var body: some View {
+        TabView(selection: $section) {
+            InstallerCatalogView(catalog: catalog, store: store) { app in
+                selectedApp = app
+            }
+            .tabItem { Label(InstallerSection.store.title, systemImage: InstallerSection.store.symbol) }
+            .tag(InstallerSection.store)
+
+            InstallerRepositoriesView(catalog: catalog)
+                .tabItem { Label(InstallerSection.repositories.title, systemImage: InstallerSection.repositories.symbol) }
+                .tag(InstallerSection.repositories)
+
+            InstallerInstalledView(store: store, onOpen: onOpen)
+                .tabItem { Label(InstallerSection.installed.title, systemImage: InstallerSection.installed.symbol) }
+                .tag(InstallerSection.installed)
+        }
+        .tint(.orange)
+        .task { await catalog.seedAndRefresh() }
+        .sheet(item: $selectedApp) { app in
+            InstallerInstallChoiceView(app: app, catalog: catalog, store: store)
+        }
+    }
+}
+
+private enum InstallerSort: String, CaseIterable, Identifiable {
+    case alphabetical
+    case category
+    case newest
+
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .alphabetical: return "A-Z"
+        case .category: return "Category"
+        case .newest: return "Newest"
+        }
+    }
+}
+
+private struct InstallerCatalogView: View {
+    @ObservedObject var catalog: InstallerCatalog
+    @ObservedObject var store: WorkspaceStore
+    let onInstall: (CatalogApp) -> Void
+    @State private var searchText = ""
+    @State private var sort = InstallerSort.alphabetical
+    @State private var showingIPAImporter = false
+
+    private var visibleApps: [CatalogApp] {
+        let filtered = catalog.apps.filter { app in
+            searchText.isEmpty || app.name.localizedCaseInsensitiveContains(searchText) ||
+            app.developer.localizedCaseInsensitiveContains(searchText) ||
+            app.category.localizedCaseInsensitiveContains(searchText)
+        }
+        switch sort {
+        case .alphabetical:
+            return filtered.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        case .category:
+            return filtered.sorted {
+                let categoryOrder = $0.category.localizedCaseInsensitiveCompare($1.category)
+                if categoryOrder == .orderedSame {
+                    return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+                }
+                return categoryOrder == .orderedAscending
+            }
+        case .newest:
+            return filtered.sorted { $0.version.localizedStandardCompare($1.version) == .orderedDescending }
+        }
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    HStack(spacing: 14) {
+                        Image(systemName: "bag.fill")
+                            .font(.title2.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: 52, height: 52)
+                            .background(.orange, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Workspace Store")
+                                .font(.title3.weight(.bold))
+                            Text("Discover apps from your repositories")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.vertical, 8)
+                }
+                .listRowBackground(Color.clear)
+
+                if visibleApps.isEmpty {
+                    ContentUnavailableView(
+                        searchText.isEmpty ? "No apps yet" : "No matching apps",
+                        systemImage: searchText.isEmpty ? "bag" : "magnifyingglass",
+                        description: Text(searchText.isEmpty ? "Refresh a repository from Repos to build your catalog." : "Try a different search.")
+                    )
+                } else {
+                    ForEach(visibleApps) { app in
+                        InstallerCatalogRow(app: app, isDownloading: catalog.downloadingIDs.contains(app.id)) {
+                            onInstall(app)
+                        }
+                    }
+                }
+            }
+            .listStyle(.plain)
+            .navigationTitle("Store")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Button {
+                            showingIPAImporter = true
+                        } label: {
+                            Label("Import IPA", systemImage: "square.and.arrow.down")
+                        }
+                        Divider()
+                        Picker("Sort", selection: $sort) {
+                            ForEach(InstallerSort.allCases) { option in
+                                Text(option.title).tag(option)
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
+                    .accessibilityLabel("Store actions")
+                }
+            }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                HStack(spacing: 10) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(.secondary)
+                    TextField("Search apps", text: $searchText)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    if !searchText.isEmpty {
+                        Button { searchText = "" } label: {
+                            Image(systemName: "xmark.circle.fill")
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 11)
+                .background(.bar)
+            }
+            .fileImporter(isPresented: $showingIPAImporter, allowedContentTypes: [.item], allowsMultipleSelection: false) { result in
+                switch result {
+                case .success(let urls):
+                    guard let url = urls.first else { return }
+                    guard ["ipa", "tipa", "zip"].contains(url.pathExtension.lowercased()) else {
+                        store.importError = "Choose an IPA file."
+                        return
+                    }
+                    guard let copied = store.copyToWorkspaceFiles(from: url) else { return }
+                    store.installerImportIPA(from: copied)
+                case .failure(let error):
+                    store.importError = error.localizedDescription
+                }
+            }
+        }
+    }
+}
+
+private struct InstallerCatalogRow: View {
+    let app: CatalogApp
+    let isDownloading: Bool
+    let action: () -> Void
+
+    var body: some View {
+        HStack(spacing: 13) {
+            Image(systemName: "app.fill")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(.white)
+                .frame(width: 52, height: 52)
+                .background(.orange, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+            VStack(alignment: .leading, spacing: 3) {
+                Text(app.name).font(.body.weight(.semibold)).lineLimit(1)
+                Text("\(app.developer) · \(app.category)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Text("Version \(app.version)")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            Spacer(minLength: 8)
+            Button(isDownloading ? "Preparing" : "Get", action: action)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(isDownloading)
+        }
+        .padding(.vertical, 5)
+    }
+}
+
+private struct InstallerRepositoriesView: View {
+    @ObservedObject var catalog: InstallerCatalog
+    @State private var showingAddSource = false
+    @State private var sourceURL = ""
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if catalog.sources.isEmpty {
+                    ContentUnavailableView("No repositories", systemImage: "server.rack", description: Text("Add an AltStore, SideStore, eSign, or KSign-compatible feed."))
+                } else {
+                    ForEach(catalog.sources) { source in
+                        HStack(spacing: 12) {
+                            Image(systemName: "server.rack")
+                                .foregroundStyle(.white)
+                                .frame(width: 42, height: 42)
+                                .background(.indigo, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(source.name).font(.body.weight(.semibold))
+                                Text("\(source.apps.count) apps · \(source.status)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button { catalog.refresh(source) } label: {
+                                Image(systemName: "arrow.clockwise")
+                            }
+                            .disabled(catalog.loadingSourceIDs.contains(source.id))
+                        }
+                        .padding(.vertical, 4)
+                    }
+                    .onDelete { catalog.remove(at: $0) }
+                }
+            }
+            .listStyle(.insetGrouped)
+            .navigationTitle("Repositories")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { showingAddSource = true } label: {
+                        Image(systemName: "plus")
+                    }
+                    .accessibilityLabel("Add repository")
+                }
+            }
+            .alert("Add repository", isPresented: $showingAddSource) {
+                TextField("https://example.com/apps.json", text: $sourceURL)
+                    .textInputAutocapitalization(.never)
+                    .keyboardType(.URL)
+                Button("Add") {
+                    catalog.addSource(sourceURL)
+                    sourceURL = ""
+                }
+                Button("Cancel", role: .cancel) { sourceURL = "" }
+            } message: {
+                Text("Use an HTTPS AltStore, SideStore, eSign, or KSign-compatible JSON feed.")
+            }
+        }
+    }
+}
+
+private struct InstallerInstalledView: View {
+    @ObservedObject var store: WorkspaceStore
+    let onOpen: (VirtualApp) -> Void
+
+    var body: some View {
+        NavigationStack {
+#if LIVE_CONTAINER_NATIVE
+            NativeLiveContainerAppLibraryView()
+                .navigationTitle("Installed")
+#else
+            InstalledAppsView(store: store, onOpen: onOpen)
+                .navigationTitle("Installed")
+#endif
+        }
+    }
+}
+
+private enum InstallMode: String, CaseIterable, Identifiable {
+    case liveContainer
+    case sign
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .liveContainer: return "LiveContainer"
+        case .sign: return "Sign and install"
+        }
+    }
+}
+
+private struct InstallerInstallChoiceView: View {
+    let app: CatalogApp
+    @ObservedObject var catalog: InstallerCatalog
+    @ObservedObject var store: WorkspaceStore
+    @Environment(\.dismiss) private var dismiss
+    @StateObject private var assetStore = SigningAssetStore()
+    @State private var mode = InstallMode.liveContainer
+    @State private var certificatePassword = ""
+    @State private var showingCertificateImporter = false
+    @State private var showingProfileImporter = false
+    @State private var isWorking = false
+    @State private var statusMessage: String?
+#if LIVE_CONTAINER_NATIVE
+    @StateObject private var signer = NativeIPASigningEngine()
+#endif
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    HStack(spacing: 14) {
+                        Image(systemName: "app.fill")
+                            .font(.title2.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: 62, height: 62)
+                            .background(.orange, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(app.name).font(.title3.weight(.bold))
+                            Text("\(app.developer) · \(app.version)")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    Picker("Install method", selection: $mode) {
+                        ForEach(InstallMode.allCases) { option in
+                            Text(option.title).tag(option)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+
+                    if mode == .liveContainer {
+                        Label("The app will be installed into LiveContainer and appear on the Workspace home screen.", systemImage: "shippingbox.and.arrow.backward.fill")
+                            .font(.body)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        signingOptions
+                    }
+
+                    if let statusMessage {
+                        Text(statusMessage)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(20)
+            }
+            .navigationTitle("Install")
+            .navigationBarTitleDisplayMode(.inline)
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                Button {
+                    install()
+                } label: {
+                    HStack {
+                        if isWorking { ProgressView().tint(.white) }
+                        Text(mode == .sign ? "Sign and install" : "Install with LiveContainer")
+                            .font(.body.weight(.semibold))
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 50)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(isWorking || (mode == .sign && !signingReady))
+                .padding(.horizontal, 18)
+                .padding(.vertical, 10)
+                .background(.bar)
+            }
+            .fileImporter(isPresented: $showingCertificateImporter, allowedContentTypes: SigningAssetKind.certificate.fileImporterContentTypes, allowsMultipleSelection: false) { result in
+                if case .success(let urls) = result, let url = urls.first { _ = assetStore.importAsset(from: url, kind: .certificate) }
+            }
+            .fileImporter(isPresented: $showingProfileImporter, allowedContentTypes: SigningAssetKind.provisioningProfile.fileImporterContentTypes, allowsMultipleSelection: false) { result in
+                if case .success(let urls) = result, let url = urls.first { _ = assetStore.importAsset(from: url, kind: .provisioningProfile) }
+            }
+            .onAppear { certificatePassword = WorkspaceCertificatePasswordStore.load() }
+#if LIVE_CONTAINER_NATIVE
+            .onChange(of: signer.signedIPAURL) { _, url in
+                guard let url else { return }
+                NativeWorkspaceInstaller.shared.install(url: url)
+                statusMessage = "Signed app installed into LiveContainer."
+                isWorking = false
+                dismiss()
+            }
+#endif
+        }
+    }
+
+    private var signingReady: Bool {
+        assetStore.asset(for: .certificate) != nil &&
+        assetStore.asset(for: .provisioningProfile) != nil &&
+        !certificatePassword.isEmpty
+    }
+
+    @ViewBuilder
+    private var signingOptions: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Signing options").font(.headline)
+            Button { showingCertificateImporter = true } label: {
+                Label(assetStore.asset(for: .certificate)?.originalName ?? "Choose certificate (.p12 or .pfx)", systemImage: "key.fill")
+            }
+            Button { showingProfileImporter = true } label: {
+                Label(assetStore.asset(for: .provisioningProfile)?.originalName ?? "Choose provisioning profile", systemImage: "doc.badge.gearshape")
+            }
+            SecureField("Certificate password", text: $certificatePassword)
+                .textContentType(.password)
+                .onChange(of: certificatePassword) { _, value in WorkspaceCertificatePasswordStore.save(value) }
+            Text("The signed app is also installed into LiveContainer after signing.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func install() {
+        isWorking = true
+        statusMessage = "Downloading \(app.name)…"
+        Task { @MainActor in
+            do {
+                let ipaURL = try await catalog.fetchIPA(app, store: store)
+                if mode == .liveContainer {
+                    store.installerImportIPA(from: ipaURL)
+                    statusMessage = "Installed into LiveContainer."
+                    isWorking = false
+                    dismiss()
+                } else {
+#if LIVE_CONTAINER_NATIVE
+                    signer.sign(
+                        packageURL: ipaURL,
+                        certificate: assetStore.data(for: .certificate),
+                        provisioningProfile: assetStore.data(for: .provisioningProfile),
+                        certificatePassword: certificatePassword
+                    )
+                    statusMessage = "Signing \(app.name)…"
+#else
+                    statusMessage = "Signing is available in the integrated Workspace build."
+                    isWorking = false
+#endif
+                }
+            } catch {
+                statusMessage = error.localizedDescription
+                isWorking = false
+            }
+        }
+    }
+}
+
+/// The app-owned file system is a separate utility so Installer can stay a
+/// catalog and installation workflow rather than becoming a settings screen.
+struct WorkspaceFileManagerView: View {
+    @ObservedObject var store: WorkspaceStore
+    @State private var showingImporter = false
+    @StateObject private var assetStore = SigningAssetStore()
+
+    private let folders = ["Incoming", "IPAs", "Certificates", "Provisioning Profiles", "Downloads", "Signed"]
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section("Workspace storage") {
+                    ForEach(folders, id: \.self) { folder in
+                        NavigationLink {
+                            WorkspaceFolderView(folder: folder, store: store)
+                        } label: {
+                            Label(folder, systemImage: folder == "Certificates" ? "key.fill" : "folder.fill")
+                        }
+                    }
+                }
+                Section("All files") {
+                    let files = store.workspaceFiles()
+                    if files.isEmpty {
+                        ContentUnavailableView("No files", systemImage: "folder", description: Text("Import a file or copy one into Workspace Files from the Files app."))
+                    } else {
+                        ForEach(files, id: \.path) { file in
+                            WorkspaceFileRow(file: file, onUse: {
+                                use(file)
+                            }) {
+                                store.deleteWorkspaceFile(file)
+                            }
+                        }
+                        .onDelete { offsets in
+                            offsets.compactMap { files.indices.contains($0) ? files[$0] : nil }.forEach(store.deleteWorkspaceFile)
+                        }
+                    }
+                }
+            }
+            .listStyle(.insetGrouped)
+            .navigationTitle("File Manager")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { showingImporter = true } label: { Image(systemName: "plus") }
+                        .accessibilityLabel("Import file")
+                }
+            }
+            .fileImporter(isPresented: $showingImporter, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
+                switch result {
+                case .success(let urls): urls.forEach { _ = store.copyToWorkspaceFiles(from: $0) }
+                case .failure(let error): store.importError = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func use(_ file: URL) {
+        switch file.pathExtension.lowercased() {
+        case "ipa", "tipa", "zip":
+            store.installerImportIPA(from: file)
+        case "p12", "pfx":
+            if !assetStore.importAsset(from: file, kind: .certificate) {
+                store.importError = assetStore.errorMessage
+            }
+        case "mobileprovision", "provisionprofile":
+            if !assetStore.importAsset(from: file, kind: .provisioningProfile) {
+                store.importError = assetStore.errorMessage
+            }
+        default:
+            store.importError = "This file type is stored for sharing only."
+        }
+    }
+}
+
+private struct WorkspaceFolderView: View {
+    let folder: String
+    @ObservedObject var store: WorkspaceStore
+    @StateObject private var assetStore = SigningAssetStore()
+
+    private var files: [URL] {
+        store.workspaceFiles().filter { $0.deletingLastPathComponent().lastPathComponent == folder }
+    }
+
+    var body: some View {
+        List {
+            if files.isEmpty {
+                ContentUnavailableView("Folder is empty", systemImage: "folder", description: Text("Add files from File Manager or the Files app."))
+            } else {
+                ForEach(files, id: \.path) { file in
+                    WorkspaceFileRow(file: file, onUse: { use(file) }) {
+                        store.deleteWorkspaceFile(file)
+                    }
+                }
+                .onDelete { offsets in offsets.compactMap { files.indices.contains($0) ? files[$0] : nil }.forEach(store.deleteWorkspaceFile) }
+            }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle(folder)
+    }
+
+    private func use(_ file: URL) {
+        switch file.pathExtension.lowercased() {
+        case "ipa", "tipa", "zip":
+            store.installerImportIPA(from: file)
+        case "p12", "pfx":
+            if !assetStore.importAsset(from: file, kind: .certificate) {
+                store.importError = assetStore.errorMessage
+            }
+        case "mobileprovision", "provisionprofile":
+            if !assetStore.importAsset(from: file, kind: .provisioningProfile) {
+                store.importError = assetStore.errorMessage
+            }
+        default:
+            store.importError = "This file type is stored for sharing only."
+        }
+    }
+}
+
+private struct WorkspaceFileRow: View {
+    let file: URL
+    let onUse: () -> Void
+    let onDelete: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .foregroundStyle(.white)
+                .frame(width: 40, height: 40)
+                .background(.teal, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            VStack(alignment: .leading, spacing: 3) {
+                Text(file.lastPathComponent).lineLimit(1)
+                Text(file.deletingLastPathComponent().lastPathComponent).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            if isUsable {
+                Button("Use", action: onUse)
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+            }
+            ShareLink(item: file) { Image(systemName: "square.and.arrow.up") }
+                .frame(width: 44, height: 44)
+                .accessibilityLabel("Share \(file.lastPathComponent)")
+        }
+        .contextMenu {
+            if isUsable {
+                Button("Use", action: onUse)
+            }
+            ShareLink(item: file) { Label("Share", systemImage: "square.and.arrow.up") }
+            Button("Delete", role: .destructive, action: onDelete)
+        }
+    }
+
+    private var isUsable: Bool {
+        ["ipa", "tipa", "zip", "p12", "pfx", "mobileprovision", "provisionprofile"]
+            .contains(file.pathExtension.lowercased())
+    }
+
+    private var icon: String {
+        switch file.pathExtension.lowercased() {
+        case "ipa", "tipa", "zip": return "shippingbox.fill"
+        case "p12", "pfx": return "key.fill"
+        case "mobileprovision", "provisionprofile": return "doc.badge.gearshape"
+        default: return "doc.fill"
+        }
     }
 }
 
@@ -289,21 +927,26 @@ private final class InstallerCatalog: ObservableObject {
         Task {
             defer { downloadingIDs.remove(app.id) }
             do {
-                let (data, response) = try await URLSession.shared.data(from: app.downloadURL)
-                guard (response as? HTTPURLResponse)?.statusCode ?? 0 >= 200,
-                      (response as? HTTPURLResponse)?.statusCode ?? 0 < 300,
-                      !data.isEmpty else { throw CatalogError.invalidDownload }
-                let downloadsDirectory = store.workspaceFolderDirectory(named: "Downloads")
-                try FileManager.default.createDirectory(at: downloadsDirectory, withIntermediateDirectories: true)
-                let safeName = app.name.replacingOccurrences(of: "/", with: "-") + "-\(app.version).ipa"
-                let destination = downloadsDirectory.appendingPathComponent(safeName, isDirectory: false)
-                try data.write(to: destination, options: [.atomic])
-                store.workspaceFilesDidChange()
+                let destination = try await fetchIPA(app, store: store)
                 store.installerImportIPA(from: destination)
             } catch {
                 store.importError = "Could not download \(app.name): \(error.localizedDescription)"
             }
         }
+    }
+
+    func fetchIPA(_ app: CatalogApp, store: WorkspaceStore) async throws -> URL {
+        let (data, response) = try await URLSession.shared.data(from: app.downloadURL)
+        guard (response as? HTTPURLResponse)?.statusCode ?? 0 >= 200,
+              (response as? HTTPURLResponse)?.statusCode ?? 0 < 300,
+              !data.isEmpty else { throw CatalogError.invalidDownload }
+        let downloadsDirectory = store.workspaceFolderDirectory(named: "Downloads")
+        try FileManager.default.createDirectory(at: downloadsDirectory, withIntermediateDirectories: true)
+        let safeName = app.name.replacingOccurrences(of: "/", with: "-") + "-\(app.version).ipa"
+        let destination = downloadsDirectory.appendingPathComponent(safeName, isDirectory: false)
+        try data.write(to: destination, options: [.atomic])
+        store.workspaceFilesDidChange()
+        return destination
     }
 
     private func refreshAsync(_ source: CatalogSource) async {
@@ -1071,7 +1714,6 @@ struct FolderView: View {
 struct SettingsView: View {
     @ObservedObject var store: WorkspaceStore
     @State private var searchText = ""
-    @State private var showingWallpaperImporter = false
 
     private func matches(_ terms: String...) -> Bool {
         guard !searchText.isEmpty else { return true }
@@ -1080,100 +1722,52 @@ struct SettingsView: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                if matches("Home", "grid", "labels", "motion") {
-                    Section("Home screen") {
-                        Toggle("Show app labels", isOn: $store.settings.showAppLabels)
-                        Stepper("Home columns: \(store.settings.gridColumns)", value: $store.settings.gridColumns, in: 2...5)
-                        Toggle("Confirm app removal", isOn: $store.settings.confirmRemoval)
-                        Toggle("Reduce motion", isOn: $store.settings.reduceShellMotion)
-                    }
-                }
-
-                if matches("Appearance", "wallpaper", "glass", "opacity") {
-                    Section("Appearance") {
-                        Picker("Wallpaper", selection: Binding(
-                            get: { store.settings.wallpaper.rawValue },
-                            set: { store.settings.wallpaper = WallpaperOption(rawValue: $0) ?? store.settings.wallpaper }
-                        )) {
-                            ForEach(WallpaperOption.allCases) { option in
-                                Label(option.label, systemImage: option.iconSymbol)
-                                    .tag(option.rawValue)
-                            }
-                        }
-                        Picker("Glass style", selection: Binding(
-                            get: { store.settings.glassStyle.rawValue },
-                            set: { store.settings.glassStyle = GlassStyle(rawValue: $0) ?? store.settings.glassStyle }
-                        )) {
-                            ForEach(GlassStyle.allCases) { style in
-                                Text(style.label).tag(style.rawValue)
-                            }
-                        }
-                        Button {
-                            showingWallpaperImporter = true
+            List {
+                Section {
+                    if matches("Customization", "Appearance", "Wallpaper", "background", "glass") {
+                        NavigationLink {
+                            CustomizationSettingsView(store: store)
                         } label: {
-                            Label(
-                                store.settings.wallpaper == .custom ? "Replace wallpaper photo" : "Choose wallpaper photo",
-                                systemImage: "photo.on.rectangle"
-                            )
+                            Label("Customization", systemImage: "paintbrush.fill")
                         }
-                        if store.settings.wallpaper == .custom {
-                            Button("Remove custom wallpaper", role: .destructive) {
-                                store.removeCustomWallpaper()
-                            }
-                        }
-                        Slider(value: $store.settings.glassOpacity, in: 0.35...1) {
-                            Text("Glass opacity")
-                        } minimumValueLabel: {
-                            Image(systemName: "circle.lefthalf.filled")
-                        } maximumValueLabel: {
-                            Image(systemName: "circle.fill")
-                        }
-                        .accessibilityValue("\(Int(store.settings.glassOpacity * 100)) percent")
                     }
-                }
-
-                if matches("Signing", "certificate", "profile", "p12", "mobileprovision", "JIT") {
-                    Section("Signing and JIT") {
+                    if matches("Home screen", "grid", "labels", "motion", "remove") {
+                        NavigationLink {
+                            HomeScreenSettingsView(store: store)
+                        } label: {
+                            Label("Home Screen", systemImage: "square.grid.3x3.fill")
+                        }
+                    }
+                    if matches("Signing", "certificate", "profile", "p12", "mobileprovision", "JIT") {
                         NavigationLink {
                             SigningAndJITSettingsView(store: store)
                         } label: {
-                            Label("Certificates and JIT", systemImage: "key.viewfinder")
+                            Label("Signing and JIT", systemImage: "key.viewfinder")
                         }
                     }
-                }
-
-                if matches("LiveContainer", "runtime", "JIT", "installed apps") {
-                    Section("Runtime") {
+                    if matches("LiveContainer", "runtime", "guest", "JIT") {
                         NavigationLink {
                             LiveContainerSettingsView(store: store)
                         } label: {
-                            Label {
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text("LiveContainer")
-                                        .font(.body.weight(.semibold))
-                                    Text(LiveContainerRuntime.shared.availability.label)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                            } icon: {
-                                Image(systemName: "bolt.horizontal.circle.fill")
-                                    .foregroundStyle(.green)
-                            }
+                            Label("LiveContainer", systemImage: "bolt.horizontal.circle.fill")
                         }
                     }
+                } header: {
+                    Text("Workspace")
                 }
 
-                if matches("Reset", "workspace", "advanced") {
-                    Section("Advanced") {
+                Section {
+                    if matches("Reset", "workspace", "advanced") {
                         Button("Reset workspace", role: .destructive) {
                             store.resetWorkspace()
                         }
                     }
+                } header: {
+                    Text("Advanced")
                 }
 
-                if !matches("Home", "grid", "labels", "motion", "Appearance", "wallpaper", "glass", "opacity", "Signing", "certificate", "profile", "p12", "mobileprovision", "JIT", "LiveContainer", "runtime", "installed apps", "Reset", "workspace", "advanced") {
-                    ContentUnavailableView("No matching settings", systemImage: "magnifyingglass", description: Text("Try a different search.") )
+                if !matches("Customization", "Appearance", "Wallpaper", "background", "glass", "Home screen", "grid", "labels", "motion", "remove", "Signing", "certificate", "profile", "p12", "mobileprovision", "JIT", "LiveContainer", "runtime", "guest", "Reset", "workspace", "advanced") {
+                    ContentUnavailableView("No matching settings", systemImage: "magnifyingglass", description: Text("Try a different search."))
                 }
             }
             .searchable(text: $searchText, prompt: "Search settings")
@@ -1181,16 +1775,71 @@ struct SettingsView: View {
             .onChange(of: store.settings) { _, _ in
                 store.settingsDidChange()
             }
-            .fileImporter(
-                isPresented: $showingWallpaperImporter,
-                allowedContentTypes: [.image],
-                allowsMultipleSelection: false
-            ) { result in
-                if case .success(let urls) = result, let url = urls.first {
-                    _ = store.importWallpaper(from: url)
+        }
+    }
+}
+
+struct CustomizationSettingsView: View {
+    @ObservedObject var store: WorkspaceStore
+    @State private var showingWallpaperImporter = false
+
+    var body: some View {
+        Form {
+            Section("Background") {
+                Picker("Wallpaper", selection: Binding(
+                    get: { store.settings.wallpaper.rawValue },
+                    set: { store.settings.wallpaper = WallpaperOption(rawValue: $0) ?? store.settings.wallpaper }
+                )) {
+                    ForEach(WallpaperOption.allCases) { option in
+                        Label(option.label, systemImage: option.iconSymbol).tag(option.rawValue)
+                    }
+                }
+                Button {
+                    showingWallpaperImporter = true
+                } label: {
+                    Label(store.settings.wallpaper == .custom ? "Replace background photo" : "Choose background photo", systemImage: "photo.on.rectangle")
+                }
+                if store.settings.wallpaper == .custom {
+                    Button("Remove custom background", role: .destructive) { store.removeCustomWallpaper() }
                 }
             }
+            Section("Material") {
+                Picker("Glass style", selection: Binding(
+                    get: { store.settings.glassStyle.rawValue },
+                    set: { store.settings.glassStyle = GlassStyle(rawValue: $0) ?? store.settings.glassStyle }
+                )) {
+                    ForEach(GlassStyle.allCases) { style in Text(style.label).tag(style.rawValue) }
+                }
+                Slider(value: $store.settings.glassOpacity, in: 0.35...1) {
+                    Text("Glass opacity")
+                } minimumValueLabel: { Image(systemName: "circle.lefthalf.filled") } maximumValueLabel: { Image(systemName: "circle.fill") }
+            }
         }
+        .navigationTitle("Customization")
+        .fileImporter(isPresented: $showingWallpaperImporter, allowedContentTypes: [.image], allowsMultipleSelection: false) { result in
+            if case .success(let urls) = result, let url = urls.first { _ = store.importWallpaper(from: url) }
+        }
+    }
+}
+
+struct HomeScreenSettingsView: View {
+    @ObservedObject var store: WorkspaceStore
+
+    var body: some View {
+        Form {
+            Section("Layout") {
+                Toggle("Show app labels", isOn: $store.settings.showAppLabels)
+                Stepper("Home columns: \(store.settings.gridColumns)", value: $store.settings.gridColumns, in: 2...5)
+                Toggle("Reduce motion", isOn: $store.settings.reduceShellMotion)
+            }
+            Section("App removal") {
+                Toggle("Confirm app removal", isOn: $store.settings.confirmRemoval)
+                Text("Use an app icon context menu to remove a LiveContainer guest from the home screen.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .navigationTitle("Home Screen")
     }
 }
 
