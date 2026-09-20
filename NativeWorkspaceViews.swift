@@ -399,7 +399,7 @@ final class NativeIPASigningEngine: ObservableObject {
         try fileManager.createDirectory(at: outputRoot, withIntermediateDirectories: true)
         let outputPayload = outputRoot.appendingPathComponent("Payload", isDirectory: true)
         try fileManager.copyItem(at: payloadRoot, to: outputPayload)
-        guard let archiveData = LCUtils.workspaceZipDirectory(atURL: outputPayload.deletingLastPathComponent()) else {
+        guard let archiveData = LCUtils.workspaceZipDirectory(at: outputPayload.deletingLastPathComponent()) else {
             throw NativeIPASigningError.archiveFailed
         }
 
