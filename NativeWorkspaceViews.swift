@@ -446,7 +446,8 @@ final class NativeIPASigningEngine: ObservableObject {
         }
 
         let outputDirectory = fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Signed IPAs", isDirectory: true)
+            .appendingPathComponent("Workspace Files", isDirectory: true)
+            .appendingPathComponent("Signed", isDirectory: true)
         try fileManager.createDirectory(at: outputDirectory, withIntermediateDirectories: true)
         let fileName = appURL.deletingPathExtension().lastPathComponent + "-signed.ipa"
         let outputURL = outputDirectory.appendingPathComponent(fileName, isDirectory: false)
