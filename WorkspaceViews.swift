@@ -657,6 +657,16 @@ private struct InstallerInstallChoiceView: View {
                     Text(localServer.statusMessage ?? installURL.absoluteString)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
+                    if localServer.backgroundTimeRemaining.isFinite {
+                        Text("Background transfer time: \(Int(localServer.backgroundTimeRemaining.rounded(.down))) seconds")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    if localServer.backgroundExecutionExpired {
+                        Text("The local transfer window expired. Use Workspace Pi for the HTTPS installer.")
+                            .font(.footnote)
+                            .foregroundStyle(.red)
+                    }
                 }
             }
 #endif

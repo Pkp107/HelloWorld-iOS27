@@ -12,6 +12,8 @@ Workspace is a SwiftUI launcher compiled with the iOS 27 SDK. It includes a fixe
 
 The workflow creates an **unsigned** IPA. GitHub Actions only builds the package; an iPhone still needs a compatible signing and installation method.
 
+The on-device installer uses `UIApplication.beginBackgroundTask(withName:expirationHandler:)` while Workspace is foregrounded. UIKit may grant a short grace period, commonly around 30 seconds, after the app backgrounds; `UIApplication.backgroundTimeRemaining` is shown in the installer and the expiration handler stops advertising the local transfer. There is no general background-server entitlement that extends this period. `BGTaskScheduler` is for deferred refresh or processing and cannot keep an OTA socket alive during an interactive install.
+
 ## LiveContainer status
 
 The integrated artifact is assembled from pinned upstream LiveContainer sources, including the native bootstrap, shared framework, process and launch extensions, loader, ZSign, and required submodules. Its Installer and Installed Apps entries use the upstream importer and guest-app list. The fallback target keeps the same UI contracts and stores imported IPAs locally, but cannot execute guest processes on its own.
