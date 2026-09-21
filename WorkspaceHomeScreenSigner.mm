@@ -57,7 +57,10 @@ void refreshFile(NSString *path);
                 if (!macho.Init(fileURL.path.UTF8String)) {
                     continue;
                 }
-                if (!macho.Sign(&signingAsset, true, string(bundleId.UTF8String), "", "", "")) {
+                // Passing an empty identifier makes ZSign use each Mach-O's
+                // own embedded Info.plist. Extensions and frameworks must not
+                // inherit the top-level application's bundle identifier.
+                if (!macho.Sign(&signingAsset, true, "", "", "", "")) {
                     signedApp = NO;
                     continue;
                 }
