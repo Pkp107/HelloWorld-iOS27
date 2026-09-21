@@ -2016,6 +2016,7 @@ struct FolderView: View {
 
 struct SettingsView: View {
     @ObservedObject var store: WorkspaceStore
+    @StateObject private var moduleStore = WorkspaceModuleStore()
     @State private var searchText = ""
 
     private func matches(_ terms: String...) -> Bool {
@@ -2055,6 +2056,13 @@ struct SettingsView: View {
                             Label("LiveContainer", systemImage: "bolt.horizontal.circle.fill")
                         }
                     }
+                    if matches("Modules", "developer", "tools", "Java", "C", "C++", "C#", ".NET", "Python", "Swift", "WebAssembly", "Xcode", "GitHub", "debugger", "Frida", "server", "Moonlight", "MCP", "AI") {
+                        NavigationLink {
+                            WorkspaceModulesView(store: moduleStore)
+                        } label: {
+                            Label("Modules", systemImage: "shippingbox.fill")
+                        }
+                    }
                 } header: {
                     Text("Workspace")
                 }
@@ -2069,7 +2077,7 @@ struct SettingsView: View {
                     Text("Advanced")
                 }
 
-                if !matches("Customization", "Appearance", "Wallpaper", "background", "glass", "Home screen", "grid", "labels", "motion", "remove", "Signing", "certificate", "profile", "p12", "mobileprovision", "JIT", "LiveContainer", "runtime", "guest", "Reset", "workspace", "advanced") {
+                if !matches("Customization", "Appearance", "Wallpaper", "background", "glass", "Home screen", "grid", "labels", "motion", "remove", "Signing", "certificate", "profile", "p12", "mobileprovision", "JIT", "LiveContainer", "runtime", "guest", "Modules", "developer", "tools", "Java", "C", "C++", "C#", ".NET", "Python", "Swift", "WebAssembly", "Xcode", "GitHub", "debugger", "Frida", "server", "Moonlight", "MCP", "AI", "Reset", "workspace", "advanced") {
                     ContentUnavailableView("No matching settings", systemImage: "magnifyingglass", description: Text("Try a different search."))
                 }
             }
