@@ -24,11 +24,16 @@ final class LocalInstallServer: ObservableObject {
     /// Loopback is useful for Safari, but the system installer can resolve
     /// the device's LAN address more reliably after Workspace is backgrounded.
     @Published private(set) var hostAddress: String?
+    /// Remaining time reported by UIKit after the app is backgrounded. A
+    /// finite value is the system's best estimate, not a guaranteed lease.
+    @Published private(set) var backgroundTimeRemaining: TimeInterval = .greatestFiniteMagnitude
+    @Published private(set) var backgroundExecutionExpired = false
 
     private var listener: NWListener?
     private var packageURL: URL?
     private var appInfo: SignedAppInstallInfo?
     private var backgroundTask = UIBackgroundTaskIdentifier.invalid
+    private var deliveryCleanupTask: Task<Void, Never>?
     private var advertisedHost = "127.0.0.1"
 
     func start(packageURL: URL, appInfo: SignedAppInstallInfo) {
@@ -36,6 +41,11 @@ final class LocalInstallServer: ObservableObject {
         self.packageURL = packageURL
         self.appInfo = appInfo
         self.advertisedHost = Self.preferredHostAddress() ?? "127.0.0.1"
+        backgroundExecutionExpired = false
+        // Request the UIKit assertion while the app is still foregrounded.
+        // Apple warns that requesting it only after suspension has started can
+        // be too late for the system to grant it.
+        beginBackgroundTask()
         do {
             let listener = try NWListener(using: .tcp, on: .any)
             listener.stateUpdateHandler = { [weak self] state in
@@ -49,7 +59,6 @@ final class LocalInstallServer: ObservableObject {
                             return
                         }
                         self.isRunning = true
-                        self.beginBackgroundTask()
                         self.hostAddress = self.advertisedHost
                         if self.advertisedHost == "127.0.0.1" {
                             self.statusMessage = "Local installer is running on 127.0.0.1:" + String(port) + ". Connect the iPhone to Wi-Fi to enable Home Screen installation."
@@ -84,6 +93,8 @@ final class LocalInstallServer: ObservableObject {
     }
 
     func stop() {
+        deliveryCleanupTask?.cancel()
+        deliveryCleanupTask = nil
         endBackgroundTask()
         listener?.cancel()
         listener = nil
@@ -92,6 +103,8 @@ final class LocalInstallServer: ObservableObject {
         manifestURL = nil
         otaURL = nil
         hostAddress = nil
+        backgroundTimeRemaining = .greatestFiniteMagnitude
+        backgroundExecutionExpired = false
     }
 
     /// Allows the hosting UI to surface a handoff failure without exposing
@@ -102,18 +115,36 @@ final class LocalInstallServer: ObservableObject {
 
     private func beginBackgroundTask() {
         guard backgroundTask == .invalid else { return }
+        // UIKit grants a short, system-controlled grace period when the app
+        // leaves the foreground. This is the supported API for finishing the
+        // manifest and IPA transfer; no background entitlement extends it.
         backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Workspace IPA installation") { [weak self] in
-            Task { @MainActor in self?.endBackgroundTask() }
+            Task { @MainActor in
+                guard let self else { return }
+                self.backgroundExecutionExpired = true
+                self.backgroundTimeRemaining = 0
+                self.statusMessage = "iOS background time expired before the IPA finished downloading. Use the HTTPS Workspace Pi handoff."
+                self.endBackgroundTask()
+            }
         }
+        guard backgroundTask != .invalid else {
+            backgroundExecutionExpired = true
+            statusMessage = "iOS did not grant background time for the local installer. Use the HTTPS Workspace Pi handoff."
+            return
+        }
+        backgroundTimeRemaining = UIApplication.shared.backgroundTimeRemaining
+        statusMessage = "Local installer has UIKit background time to finish the handoff."
     }
 
     private func endBackgroundTask() {
         guard backgroundTask != .invalid else { return }
         UIApplication.shared.endBackgroundTask(backgroundTask)
         backgroundTask = .invalid
+        backgroundTimeRemaining = .greatestFiniteMagnitude
     }
 
     private func handle(_ connection: NWConnection) {
+        refreshBackgroundTimeRemaining()
         connection.start(queue: .global(qos: .userInitiated))
         connection.receive(minimumIncompleteLength: 1, maximumLength: 16_384) { [weak self] data, _, _, _ in
             guard let self, let data, let request = String(data: data, encoding: .utf8) else {
@@ -129,14 +160,27 @@ final class LocalInstallServer: ObservableObject {
                     guard isPackageResponse else { return }
                     Task { @MainActor in
                         self.statusMessage = "The signed IPA was delivered to the iOS installer."
-                        self.stop()
+                        self.scheduleDeliveryCleanup()
                     }
                 })
             }
         }
     }
 
+    private func scheduleDeliveryCleanup() {
+        guard deliveryCleanupTask == nil else { return }
+        // Network.framework's contentProcessed callback only means it
+        // accepted the bytes. Keep the listener and assertion alive during
+        // the iOS installer handoff, then release them after a short window.
+        deliveryCleanupTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 20_000_000_000)
+            guard !Task.isCancelled else { return }
+            self?.stop()
+        }
+    }
+
     private func response(for path: String) -> Data {
+        refreshBackgroundTimeRemaining()
         guard let packageURL, let appInfo else { return httpResponse(status: "404 Not Found", type: "text/plain", body: Data("Not found".utf8)) }
         switch path.split(separator: "?").first.map(String.init) {
         case "/install":
@@ -164,6 +208,14 @@ final class LocalInstallServer: ObservableObject {
             return httpResponse(status: "200 OK", type: "application/octet-stream", body: data)
         default:
             return httpResponse(status: "404 Not Found", type: "text/plain", body: Data("Not found".utf8))
+        }
+    }
+
+    private func refreshBackgroundTimeRemaining() {
+        guard backgroundTask != .invalid else { return }
+        let remaining = UIApplication.shared.backgroundTimeRemaining
+        if remaining.isFinite {
+            backgroundTimeRemaining = max(0, remaining)
         }
     }
 
