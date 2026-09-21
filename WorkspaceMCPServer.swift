@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 import Network
 import Darwin
 
@@ -59,7 +60,9 @@ final class WorkspaceMCPServer: ObservableObject {
                 }
             }
             listener.newConnectionHandler = { [weak self] connection in
-                self?.handle(connection)
+                Task { @MainActor in
+                    self?.handle(connection)
+                }
             }
             self.listener = listener
             listener.start(queue: .global(qos: .userInitiated))
