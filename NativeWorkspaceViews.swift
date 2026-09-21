@@ -370,7 +370,6 @@ struct NativeIPASignerView: View {
             }
             .navigationTitle("Signing")
         }
-        .onDisappear { localServer.stop() }
         .onAppear {
             if certificatePassword.isEmpty {
                 certificatePassword = WorkspaceCertificatePasswordStore.load()

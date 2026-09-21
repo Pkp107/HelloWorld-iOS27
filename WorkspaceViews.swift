@@ -565,11 +565,6 @@ private struct InstallerInstallChoiceView: View {
                 }
             }
 #endif
-            .onDisappear {
-                #if LIVE_CONTAINER_NATIVE
-                localServer.stop()
-                #endif
-            }
             #if LIVE_CONTAINER_NATIVE
             .sheet(isPresented: $showingInstallHandoff) {
                 if let signedIPAURL = signer.signedIPAURL {

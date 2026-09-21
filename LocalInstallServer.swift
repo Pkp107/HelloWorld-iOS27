@@ -110,7 +110,15 @@ final class LocalInstallServer: ObservableObject {
             let path = request.split(separator: " ").dropFirst().first.map(String.init) ?? "/"
             Task { @MainActor in
                 let response = self.response(for: path)
-                connection.send(content: response, completion: .contentProcessed { _ in connection.cancel() })
+                let isPackageResponse = path.split(separator: "?").first.map(String.init) == "/app.ipa"
+                connection.send(content: response, completion: .contentProcessed { _ in
+                    connection.cancel()
+                    guard isPackageResponse else { return }
+                    Task { @MainActor in
+                        self.statusMessage = "The signed IPA was delivered to the iOS installer."
+                        self.stop()
+                    }
+                })
             }
         }
     }
