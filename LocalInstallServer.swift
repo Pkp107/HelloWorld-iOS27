@@ -3,6 +3,7 @@ import Foundation
 import Network
 import Combine
 import UIKit
+import Darwin
 
 struct SignedAppInstallInfo: Sendable {
     let bundleIdentifier: String
@@ -19,16 +20,22 @@ final class LocalInstallServer: ObservableObject {
     /// The system installer URL. Opening this directly avoids relying on a
     /// Safari JavaScript redirect, which can be blocked during handoff.
     @Published private(set) var otaURL: URL?
+    /// The address that is embedded in the manifest and handed to iOS.
+    /// Loopback is useful for Safari, but the system installer can resolve
+    /// the device's LAN address more reliably after Workspace is backgrounded.
+    @Published private(set) var hostAddress: String?
 
     private var listener: NWListener?
     private var packageURL: URL?
     private var appInfo: SignedAppInstallInfo?
     private var backgroundTask = UIBackgroundTaskIdentifier.invalid
+    private var advertisedHost = "127.0.0.1"
 
     func start(packageURL: URL, appInfo: SignedAppInstallInfo) {
         stop()
         self.packageURL = packageURL
         self.appInfo = appInfo
+        self.advertisedHost = Self.preferredHostAddress() ?? "127.0.0.1"
         do {
             let listener = try NWListener(using: .tcp, on: .any)
             listener.stateUpdateHandler = { [weak self] state in
@@ -43,10 +50,15 @@ final class LocalInstallServer: ObservableObject {
                         }
                         self.isRunning = true
                         self.beginBackgroundTask()
-                        self.statusMessage = "Local installer is running on 127.0.0.1:" + String(port) + "."
-                        self.installURL = URL(string: "http://127.0.0.1:" + String(port) + "/install")
-                        self.manifestURL = URL(string: "http://127.0.0.1:" + String(port) + "/manifest.plist")
-                        if let manifestURL = self.manifestURL {
+                        self.hostAddress = self.advertisedHost
+                        if self.advertisedHost == "127.0.0.1" {
+                            self.statusMessage = "Local installer is running on 127.0.0.1:" + String(port) + ". Connect the iPhone to Wi-Fi to enable Home Screen installation."
+                        } else {
+                            self.statusMessage = "Local installer is running on " + self.advertisedHost + ":" + String(port) + "."
+                        }
+                        self.installURL = self.baseURL(port: port, path: "/install")
+                        self.manifestURL = self.baseURL(port: port, path: "/manifest.plist")
+                        if self.advertisedHost != "127.0.0.1", let manifestURL = self.manifestURL {
                             self.otaURL = Self.makeOTAURL(manifestURL)
                         }
                     case .failed(let error):
@@ -79,6 +91,7 @@ final class LocalInstallServer: ObservableObject {
         installURL = nil
         manifestURL = nil
         otaURL = nil
+        hostAddress = nil
     }
 
     /// Allows the hosting UI to surface a handoff failure without exposing
@@ -128,14 +141,14 @@ final class LocalInstallServer: ObservableObject {
         switch path.split(separator: "?").first.map(String.init) {
         case "/install":
             let port = listener?.port?.rawValue ?? 0
-            let manifestURL = "http://127.0.0.1:" + String(port) + "/manifest.plist"
+            let manifestURL = baseURL(port: port, path: "/manifest.plist")?.absoluteString ?? "http://127.0.0.1:" + String(port) + "/manifest.plist"
             let redirect = Self.makeOTAURL(URL(string: manifestURL)!)?.absoluteString ?? "itms-services://?action=download-manifest&url=" + manifestURL
             let html = "<html><head><meta name=\"viewport\" content=\"width=device-width\"></head><body><p>Opening iOS installation...</p><script>window.location.href=\"" + redirect + "\";</script></body></html>"
             return httpResponse(status: "200 OK", type: "text/html; charset=utf-8", body: Data(html.utf8))
         case "/manifest.plist":
             let manifest: [String: Any] = [
                 "items": [[
-                    "assets": [["kind": "software-package", "url": "http://127.0.0.1:" + String(listener?.port?.rawValue ?? 0) + "/app.ipa"]],
+                    "assets": [["kind": "software-package", "url": baseURL(port: listener?.port?.rawValue ?? 0, path: "/app.ipa")?.absoluteString ?? "http://127.0.0.1:" + String(listener?.port?.rawValue ?? 0) + "/app.ipa"]],
                     "metadata": [
                         "bundle-identifier": appInfo.bundleIdentifier,
                         "bundle-version": appInfo.version,
@@ -160,6 +173,49 @@ final class LocalInstallServer: ObservableObject {
         var header = headerText.data(using: .utf8) ?? Data()
         header.append(body)
         return header
+    }
+
+    private func baseURL(port: UInt16, path: String) -> URL? {
+        URL(string: "http://" + advertisedHost + ":" + String(port) + path)
+    }
+
+    /// Returns a non-loopback IPv4 address when the device has one. The
+    /// system installer may fetch the manifest from a separate service that
+    /// cannot reach the app's loopback interface, while both services can
+    /// reach the device over its active Wi-Fi or cellular interface.
+    private static func preferredHostAddress() -> String? {
+        var interfaces: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&interfaces) == 0, let first = interfaces else { return nil }
+        defer { freeifaddrs(first) }
+
+        var candidates: [(priority: Int, address: String)] = []
+        var current: UnsafeMutablePointer<ifaddrs>? = first
+        while let interface = current {
+            defer { current = interface.pointee.ifa_next }
+            let flags = interface.pointee.ifa_flags
+            guard flags & UInt32(IFF_UP) != 0,
+                  flags & UInt32(IFF_LOOPBACK) == 0,
+                  let socketAddress = interface.pointee.ifa_addr,
+                  socketAddress.pointee.sa_family == UInt8(AF_INET) else { continue }
+
+            var hostBuffer = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+            socketAddress.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { pointer in
+                var address = pointer.pointee.sin_addr
+                hostBuffer.withUnsafeMutableBufferPointer { buffer in
+                    _ = inet_ntop(AF_INET, &address, buffer.baseAddress, socklen_t(buffer.count))
+                }
+            }
+            let address = String(cString: hostBuffer)
+            guard !address.isEmpty, address != "127.0.0.1", !address.hasPrefix("169.254.") else { continue }
+
+            let name = String(cString: interface.pointee.ifa_name)
+            let priority: Int
+            if name == "en0" { priority = 0 }
+            else if name.hasPrefix("pdp_ip") { priority = 1 }
+            else { priority = 2 }
+            candidates.append((priority, address))
+        }
+        return candidates.sorted { $0.priority < $1.priority }.first?.address
     }
 
     private static func makeOTAURL(_ manifestURL: URL) -> URL? {
