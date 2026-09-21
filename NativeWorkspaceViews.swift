@@ -806,10 +806,11 @@ final class NativeIPASigningEngine: ObservableObject {
 
         try provisioningProfile.write(to: appURL.appendingPathComponent("embedded.mobileprovision"), options: [.atomic])
         try await withCheckedThrowingContinuation { continuation in
-            LCUtils.workspaceSignApp(
+            LCUtils.workspaceSignHomeScreenApp(
                 atPath: appURL.path,
                 bundleIdentifier: bundleIdentifier,
                 certificate: certificate,
+                provisioningProfile: provisioningProfile,
                 password: certificatePassword
             ) { success, error in
                 if success {
