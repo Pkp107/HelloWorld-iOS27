@@ -60,7 +60,7 @@ final class WorkspaceMCPServer: ObservableObject {
                 }
             }
             listener.newConnectionHandler = { [weak self] connection in
-                Task { @MainActor in
+                Task { @MainActor [weak self] in
                     self?.handle(connection)
                 }
             }
