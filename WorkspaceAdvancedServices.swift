@@ -895,7 +895,6 @@ final class WorkspaceGuestControlCenter {
         }
         switch tool {
         case "guest_tap":
-            guard elementToken == nil || element != nil else { return ("409 Conflict", refusal("unknown_element", "The element token is not in this snapshot.")) }
             guard elementToken != nil || validPixelPoint(arguments, in: snapshot.rootView) else {
                 return ("400 Bad Request", refusal("invalid_coordinate_space", "Provide a snapshot element token or pixel x and y within the returned viewport."))
             }

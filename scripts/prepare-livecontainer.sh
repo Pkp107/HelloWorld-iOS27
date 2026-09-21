@@ -37,8 +37,8 @@ cp "${ROOT_DIR}/WorkspaceLCSigningBridge.m" "${BUILD_ROOT}/LiveContainerSwiftUI/
 # bridge. The view is registered only while its scene is alive; control still
 # requires the opted-in Frida Gadget inside that guest process.
 MULTITASK_WINDOW="${BUILD_ROOT}/MultitaskSupport/MultitaskAppWindow.swift"
-perl -0pi -e 's/func appSceneVCAppDidExit\(_: AppSceneViewController!\) \{\r?\n\s*onExit\(\)\r?\n\s*\}/func appSceneVCAppDidExit(_ vc: AppSceneViewController!) {\n            Task { @MainActor in\n                WorkspaceGuestControlCenter.shared.unregisterGuestView(vc.contentView)\n            }\n            onExit()\n        }/g' "${MULTITASK_WINDOW}"
-perl -0pi -e 's/(func appSceneVC\(_ vc: AppSceneViewController!, didInitializeWithError error: \(any Error\)!\) \{)/$1\n            Task { @MainActor in\n                WorkspaceGuestControlCenter.shared.registerGuestView(vc.contentView, bundleIdentifier: vc.bundleId ?? "")\n            }/g' "${MULTITASK_WINDOW}"
+perl -0pi -e 's/func appSceneVCAppDidExit\(_: AppSceneViewController!\) \{\r?\n\s*onExit\(\)\r?\n\s*\}/func appSceneVCAppDidExit(_ vc: AppSceneViewController!) {\n            Task { \@MainActor in\n                WorkspaceGuestControlCenter.shared.unregisterGuestView(vc.contentView)\n            }\n            onExit()\n        }/g' "${MULTITASK_WINDOW}"
+perl -0pi -e 's/(func appSceneVC\(_ vc: AppSceneViewController!, didInitializeWithError error: \(any Error\)!\) \{)/$1\n            Task { \@MainActor in\n                WorkspaceGuestControlCenter.shared.registerGuestView(vc.contentView, bundleIdentifier: vc.bundleId ?? "")\n            }/g' "${MULTITASK_WINDOW}"
 
 # LCUtils dynamically loads ZSign and PKZipArchiver, avoiding a static link
 # from the Workspace SwiftUI framework.
