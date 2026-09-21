@@ -24,7 +24,7 @@ enum SystemAppKind: String, Codable, CaseIterable, Hashable {
     case remoteDesktop
 
     static var allCases: [SystemAppKind] {
-        [.helloWorld, .installer, .fileManager, .devStudio, .github, .inspector, .network, .remoteDesktop, .settings]
+        [.helloWorld, .installer, .fileManager, .devStudio, .remoteDesktop, .settings]
     }
 
     init(from decoder: Decoder) throws {
@@ -58,7 +58,7 @@ enum SystemAppKind: String, Codable, CaseIterable, Hashable {
         case .liveContainer: return "LiveContainer"
         case .liveContainerSettings: return "LiveContainer Settings"
         case .fileManager: return "File Manager"
-        case .devStudio: return "Dev Studio"
+        case .devStudio: return "Developer"
         case .github: return "GitHub"
         case .inspector: return "Inspector"
         case .network: return "Network"
@@ -76,7 +76,7 @@ enum SystemAppKind: String, Codable, CaseIterable, Hashable {
         case .liveContainer: return "shippingbox.and.arrow.backward.fill"
         case .liveContainerSettings: return "bolt.circle.fill"
         case .fileManager: return "folder.fill"
-        case .devStudio: return "hammer.fill"
+        case .devStudio: return "wrench.and.screwdriver.fill"
         case .github: return "arrow.triangle.branch"
         case .inspector: return "ladybug.fill"
         case .network: return "network"
@@ -840,6 +840,16 @@ final class WorkspaceStore: ObservableObject {
                     apps[index].displayName = kind.displayName
                     changed = true
                 }
+                if kind == .devStudio {
+                    if apps[index].displayName != kind.displayName {
+                        apps[index].displayName = kind.displayName
+                        changed = true
+                    }
+                    if apps[index].iconSymbol != kind.iconSymbol {
+                        apps[index].iconSymbol = kind.iconSymbol
+                        changed = true
+                    }
+                }
                 if !apps[index].isBuiltIn {
                     apps[index].isBuiltIn = true
                     changed = true
@@ -861,9 +871,21 @@ final class WorkspaceStore: ObservableObject {
     /// earlier build.
     private func removeRetiredSystemApps() {
         let retiredID = UUID(uuidString: "A7A82D56-1F2C-4B27-9FA9-000000000006")!
+        let retiredDeveloperIDs: Set<UUID> = [
+            UUID(uuidString: "A7A82D56-1F2C-4B27-9FA9-000000000009")!,
+            UUID(uuidString: "A7A82D56-1F2C-4B27-9FA9-000000000010")!,
+            UUID(uuidString: "A7A82D56-1F2C-4B27-9FA9-000000000011")!
+        ]
         let oldCount = apps.count
         apps.removeAll {
-            $0.id == retiredID || $0.systemApp == .liveContainerSettings || $0.systemApp == .ipaSigner || $0.systemApp == .liveContainer
+            $0.id == retiredID ||
+            retiredDeveloperIDs.contains($0.id) ||
+            $0.systemApp == .liveContainerSettings ||
+            $0.systemApp == .ipaSigner ||
+            $0.systemApp == .liveContainer ||
+            $0.systemApp == .github ||
+            $0.systemApp == .inspector ||
+            $0.systemApp == .network
         }
         if apps.count != oldCount { save() }
     }
