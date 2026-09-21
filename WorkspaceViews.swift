@@ -453,7 +453,7 @@ private enum InstallMode: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .liveContainer: return "LiveContainer"
-        case .sign: return "Sign and install"
+        case .sign: return "Home Screen install"
         }
     }
 }
@@ -521,7 +521,7 @@ private struct InstallerInstallChoiceView: View {
                 } label: {
                     HStack {
                         if isWorking { ProgressView().tint(.white) }
-                        Text(mode == .sign ? "Sign and export" : "Install with LiveContainer")
+                        Text(mode == .sign ? "Sign and install to Home Screen" : "Install with LiveContainer")
                             .font(.body.weight(.semibold))
                     }
                     .frame(maxWidth: .infinity, minHeight: 50)
@@ -543,8 +543,24 @@ private struct InstallerInstallChoiceView: View {
 #if LIVE_CONTAINER_NATIVE
             .onChange(of: signer.signedIPAURL) { _, url in
                 guard let url else { return }
-                statusMessage = "Signed IPA is ready in Workspace Files / Signed. Export it to your sideloading tool to install it on the device Home Screen."
+                localServer.start(
+                    packageURL: url,
+                    appInfo: signer.signedAppInfo ?? SignedAppInstallInfo(
+                        bundleIdentifier: app.bundleIdentifier,
+                        version: app.version,
+                        displayName: app.name
+                    )
+                )
+                statusMessage = "Signed IPA ready. Opening the phone installer..."
                 isWorking = false
+            }
+            .onChange(of: localServer.installURL) { _, url in
+                guard mode == .sign, let url else { return }
+                UIApplication.shared.open(url) { accepted in
+                    if !accepted {
+                        statusMessage = "The phone installer page could not open. Use Install on device Home Screen for SideStore or OTA setup."
+                    }
+                }
             }
 #endif
             .onDisappear {

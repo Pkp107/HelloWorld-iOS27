@@ -2,6 +2,7 @@
 import Foundation
 import Network
 import Combine
+import UIKit
 
 struct SignedAppInstallInfo: Sendable {
     let bundleIdentifier: String
@@ -19,6 +20,7 @@ final class LocalInstallServer: ObservableObject {
     private var listener: NWListener?
     private var packageURL: URL?
     private var appInfo: SignedAppInstallInfo?
+    private var backgroundTask = UIBackgroundTaskIdentifier.invalid
 
     func start(packageURL: URL, appInfo: SignedAppInstallInfo) {
         stop()
@@ -37,6 +39,7 @@ final class LocalInstallServer: ObservableObject {
                             return
                         }
                         self.isRunning = true
+                        self.beginBackgroundTask()
                         self.statusMessage = "Local installer is running on 127.0.0.1:" + String(port) + "."
                         self.installURL = URL(string: "http://127.0.0.1:" + String(port) + "/install")
                         self.manifestURL = URL(string: "http://127.0.0.1:" + String(port) + "/manifest.plist")
@@ -63,11 +66,25 @@ final class LocalInstallServer: ObservableObject {
     }
 
     func stop() {
+        endBackgroundTask()
         listener?.cancel()
         listener = nil
         isRunning = false
         installURL = nil
         manifestURL = nil
+    }
+
+    private func beginBackgroundTask() {
+        guard backgroundTask == .invalid else { return }
+        backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Workspace IPA installation") { [weak self] in
+            Task { @MainActor in self?.endBackgroundTask() }
+        }
+    }
+
+    private func endBackgroundTask() {
+        guard backgroundTask != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(backgroundTask)
+        backgroundTask = .invalid
     }
 
     private func handle(_ connection: NWConnection) {
