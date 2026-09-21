@@ -89,6 +89,10 @@ final class LocalInstallServer: ObservableObject {
             listener.start(queue: .global(qos: .userInitiated))
         } catch {
             statusMessage = "Could not start the local installer: " + error.localizedDescription
+            // `start` acquires the UIKit assertion before creating the
+            // listener. Release it if listener construction fails.
+            stop()
+            statusMessage = "Could not start the local installer: " + error.localizedDescription
         }
     }
 
