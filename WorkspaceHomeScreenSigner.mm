@@ -1,4 +1,5 @@
 #import "zsigner.h"
+#include "common/common.h"
 #include "macho.h"
 #include "openssl.h"
 
