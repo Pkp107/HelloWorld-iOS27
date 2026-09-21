@@ -554,11 +554,13 @@ private struct InstallerInstallChoiceView: View {
                 statusMessage = "Signed IPA ready. Opening the phone installer..."
                 isWorking = false
             }
-            .onChange(of: localServer.installURL) { _, url in
+            .onChange(of: localServer.otaURL) { _, url in
                 guard mode == .sign, let url else { return }
                 UIApplication.shared.open(url) { accepted in
                     if !accepted {
-                        statusMessage = "The phone installer page could not open. Use Install on device Home Screen for SideStore or OTA setup."
+                        statusMessage = "iOS could not open the Home Screen installer. Use Install on device Home Screen for SideStore or OTA setup."
+                    } else {
+                        statusMessage = "The iOS installer was opened. Confirm the install prompt to place the app on your Home Screen."
                     }
                 }
             }
@@ -627,6 +629,19 @@ private struct InstallerInstallChoiceView: View {
                         UIApplication.shared.open(installURL)
                     } label: {
                         Label("Open local installer", systemImage: "arrow.up.forward.app")
+                    }
+                    if let otaURL = localServer.otaURL {
+                        Button {
+                            UIApplication.shared.open(otaURL) { accepted in
+                                if accepted {
+                                    statusMessage = "The iOS installer was opened. Confirm the install prompt to place the app on your Home Screen."
+                                } else {
+                                    statusMessage = "iOS could not open the Home Screen installer. Use Install on device Home Screen for SideStore or OTA setup."
+                                }
+                            }
+                        } label: {
+                            Label("Open iOS Home Screen installer", systemImage: "iphone.and.arrow.forward")
+                        }
                     }
                     Text(localServer.statusMessage ?? installURL.absoluteString)
                         .font(.footnote)

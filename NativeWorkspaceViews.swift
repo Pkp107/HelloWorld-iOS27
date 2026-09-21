@@ -346,6 +346,13 @@ struct NativeIPASignerView: View {
                             } label: {
                                 Label("Open local installer", systemImage: "arrow.up.forward.app")
                             }
+                            if let otaURL = localServer.otaURL {
+                                Button {
+                                    openSystemInstaller(otaURL)
+                                } label: {
+                                    Label("Open iOS Home Screen installer", systemImage: "iphone.and.arrow.forward")
+                                }
+                            }
                             ShareLink(item: installURL) {
                                 Label("Share local install link", systemImage: "link")
                             }
@@ -421,6 +428,16 @@ struct NativeIPASignerView: View {
         UIApplication.shared.open(url) { accepted in
             if !accepted {
                 localServer.reportStatus("iOS could not open the local installer page. Try the external HTTPS or SideStore handoff.")
+            }
+        }
+    }
+
+    private func openSystemInstaller(_ url: URL) {
+        UIApplication.shared.open(url) { accepted in
+            if accepted {
+                localServer.reportStatus("The iOS installer was opened. Confirm the install prompt to place the app on your Home Screen.")
+            } else {
+                localServer.reportStatus("iOS could not open the Home Screen installer. Use the HTTPS or SideStore handoff.")
             }
         }
     }

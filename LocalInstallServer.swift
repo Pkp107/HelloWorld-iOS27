@@ -16,6 +16,9 @@ final class LocalInstallServer: ObservableObject {
     @Published private(set) var statusMessage: String?
     @Published private(set) var installURL: URL?
     @Published private(set) var manifestURL: URL?
+    /// The system installer URL. Opening this directly avoids relying on a
+    /// Safari JavaScript redirect, which can be blocked during handoff.
+    @Published private(set) var otaURL: URL?
 
     private var listener: NWListener?
     private var packageURL: URL?
@@ -43,6 +46,9 @@ final class LocalInstallServer: ObservableObject {
                         self.statusMessage = "Local installer is running on 127.0.0.1:" + String(port) + "."
                         self.installURL = URL(string: "http://127.0.0.1:" + String(port) + "/install")
                         self.manifestURL = URL(string: "http://127.0.0.1:" + String(port) + "/manifest.plist")
+                        if let manifestURL = self.manifestURL {
+                            self.otaURL = Self.makeOTAURL(manifestURL)
+                        }
                     case .failed(let error):
                         self.statusMessage = "Local installer stopped: " + error.localizedDescription
                         self.stop()
@@ -72,6 +78,7 @@ final class LocalInstallServer: ObservableObject {
         isRunning = false
         installURL = nil
         manifestURL = nil
+        otaURL = nil
     }
 
     /// Allows the hosting UI to surface a handoff failure without exposing
@@ -113,7 +120,8 @@ final class LocalInstallServer: ObservableObject {
         switch path.split(separator: "?").first.map(String.init) {
         case "/install":
             let port = listener?.port?.rawValue ?? 0
-            let redirect = "itms-services://?action=download-manifest&url=http://127.0.0.1:" + String(port) + "/manifest.plist"
+            let manifestURL = "http://127.0.0.1:" + String(port) + "/manifest.plist"
+            let redirect = Self.makeOTAURL(URL(string: manifestURL)!)?.absoluteString ?? "itms-services://?action=download-manifest&url=" + manifestURL
             let html = "<html><head><meta name=\"viewport\" content=\"width=device-width\"></head><body><p>Opening iOS installation...</p><script>window.location.href=\"" + redirect + "\";</script></body></html>"
             return httpResponse(status: "200 OK", type: "text/html; charset=utf-8", body: Data(html.utf8))
         case "/manifest.plist":
@@ -144,6 +152,16 @@ final class LocalInstallServer: ObservableObject {
         var header = headerText.data(using: .utf8) ?? Data()
         header.append(body)
         return header
+    }
+
+    private static func makeOTAURL(_ manifestURL: URL) -> URL? {
+        // Keep the nested manifest URL as one escaped query value.
+        guard var components = URLComponents(string: "itms-services://") else { return nil }
+        components.queryItems = [
+            URLQueryItem(name: "action", value: "download-manifest"),
+            URLQueryItem(name: "url", value: manifestURL.absoluteString)
+        ]
+        return components.url
     }
 }
 #endif
