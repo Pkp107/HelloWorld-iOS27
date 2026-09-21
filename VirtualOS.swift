@@ -17,9 +17,14 @@ enum SystemAppKind: String, Codable, CaseIterable, Hashable {
     case liveContainer
     case liveContainerSettings
     case fileManager
+    case devStudio
+    case github
+    case inspector
+    case network
+    case remoteDesktop
 
     static var allCases: [SystemAppKind] {
-        [.helloWorld, .settings, .installer, .fileManager]
+        [.helloWorld, .installer, .fileManager, .devStudio, .github, .inspector, .network, .remoteDesktop, .settings]
     }
 
     init(from decoder: Decoder) throws {
@@ -53,6 +58,11 @@ enum SystemAppKind: String, Codable, CaseIterable, Hashable {
         case .liveContainer: return "LiveContainer"
         case .liveContainerSettings: return "LiveContainer Settings"
         case .fileManager: return "File Manager"
+        case .devStudio: return "Dev Studio"
+        case .github: return "GitHub"
+        case .inspector: return "Inspector"
+        case .network: return "Network"
+        case .remoteDesktop: return "Remote Desktop"
         }
     }
 
@@ -66,6 +76,11 @@ enum SystemAppKind: String, Codable, CaseIterable, Hashable {
         case .liveContainer: return "shippingbox.and.arrow.backward.fill"
         case .liveContainerSettings: return "bolt.circle.fill"
         case .fileManager: return "folder.fill"
+        case .devStudio: return "hammer.fill"
+        case .github: return "arrow.triangle.branch"
+        case .inspector: return "ladybug.fill"
+        case .network: return "network"
+        case .remoteDesktop: return "rectangle.on.rectangle"
         }
     }
 
@@ -79,6 +94,11 @@ enum SystemAppKind: String, Codable, CaseIterable, Hashable {
         case .liveContainer: return "green"
         case .liveContainerSettings: return "indigo"
         case .fileManager: return "teal"
+        case .devStudio: return "blue"
+        case .github: return "purple"
+        case .inspector: return "orange"
+        case .network: return "green"
+        case .remoteDesktop: return "indigo"
         }
     }
 
@@ -86,6 +106,7 @@ enum SystemAppKind: String, Codable, CaseIterable, Hashable {
         switch self {
         case .helloWorld: return "System"
         case .appLibrary, .settings, .ipaSigner, .installer, .liveContainer, .liveContainerSettings, .fileManager: return "Utilities"
+        case .devStudio, .github, .inspector, .network, .remoteDesktop: return "Developer"
         }
     }
 }
@@ -377,7 +398,12 @@ final class WorkspaceStore: ObservableObject {
         // Reuse the old App Library identifier so migration maps that app in
         // place instead of adding a duplicate LiveContainer icon.
         .liveContainer: UUID(uuidString: "A7A82D56-1F2C-4B27-9FA9-000000000002")!,
-        .fileManager: UUID(uuidString: "A7A82D56-1F2C-4B27-9FA9-000000000007")!
+        .fileManager: UUID(uuidString: "A7A82D56-1F2C-4B27-9FA9-000000000007")!,
+        .devStudio: UUID(uuidString: "A7A82D56-1F2C-4B27-9FA9-000000000008")!,
+        .github: UUID(uuidString: "A7A82D56-1F2C-4B27-9FA9-000000000009")!,
+        .inspector: UUID(uuidString: "A7A82D56-1F2C-4B27-9FA9-000000000010")!,
+        .network: UUID(uuidString: "A7A82D56-1F2C-4B27-9FA9-000000000011")!,
+        .remoteDesktop: UUID(uuidString: "A7A82D56-1F2C-4B27-9FA9-000000000012")!
     ]
 
     init() {

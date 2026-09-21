@@ -25,7 +25,7 @@
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Workspace uses the local network to host a signed IPA installer on this device.</string>
+	<string>Workspace uses the local network for IPA installation, development servers, and its authenticated workspace file bridge.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>

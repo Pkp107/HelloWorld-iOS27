@@ -2,6 +2,31 @@
 
 Workspace is a SwiftUI launcher compiled with the iOS 27 SDK. It includes a fixed, non-scrolling home surface, wallpaper selection, folders, a first-run setup flow, Installer, Installed Apps, Settings, IPA Signer, and the built-in Hello World app. LiveContainer runtime controls live inside Settings, while LiveContainer-installed apps appear on the Workspace home screen. Apps open as full-screen surfaces with an edge home bar: on the right in portrait and on the left in landscape. The bar can be tapped or swiped.
 
+## Developer workspace
+
+Workspace now includes four developer launcher apps:
+
+- **Dev Studio** creates and edits Swift, C, C++, Java, C#, Python, TypeScript, and WASI starter projects in `Workspace Files/Projects`.
+- **GitHub** stores a repository token in the device Keychain, selects repositories and branches, uploads the active source file through the GitHub Contents API, triggers Actions, and shows recent workflow runs.
+- **Inspector** stores host diagnostics and creates a Frida Gadget preparation plan for guest IPAs managed by LiveContainer. A Gadget binary and re-signing are still required before a guest can be instrumented.
+- **Network** runs an authenticated local HTTP/MCP bridge. It is restricted to `Workspace Files` and exposes `list_files`, `read_file`, `copy_file`, `move_file`, `delete_file`, and `make_directory`; it has no shell or access to other iOS sandboxes.
+- **Remote Desktop** detects a Moonlight IPA installed through LiveContainer and launches it from a stable workspace entry.
+
+Settings > **Modules** controls the optional language, build, debugging, network, and AI-runtime modules so large toolchains and model files can be managed separately.
+
+### Build projects from Dev Studio
+
+The default GitHub workflow is `.github/workflows/workspace-build.yml`. In Dev Studio's **Build** tab, enter a GitHub token with repository workflow and contents access, choose `owner/repository`, the branch, and `workspace-build.yml`.
+
+The workflow supports these outputs:
+
+- **Windows EXE:** C, C++, C#, Python, Java, or JavaScript.
+- **WebAssembly:** C and C++.
+- **iOS Simulator:** any project that provides an Xcode project and scheme.
+- **iPhone IPA:** any project that provides an Xcode project and scheme. It produces an unsigned IPA by default; device installation still requires compatible signing assets.
+
+Dev Studio uploads its source file under `WorkspaceProjects/<id>/Sources/` before dispatching a build. For iOS targets, add `xcode_project=path/App.xcodeproj` and `xcode_scheme=App` in the optional workflow-input editor. A real iOS app still needs a valid Xcode project, Apple SDK, and signing flow.
+
 ## Build the IPA with GitHub Actions
 
 1. Push this repository to GitHub.

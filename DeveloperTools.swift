@@ -5,30 +5,45 @@ import UIKit
 
 /// Workspace's developer environment. It owns project files in Workspace
 /// Files/Projects and keeps remote build credentials in the Keychain.
+enum WorkspaceDeveloperToolTab: Hashable {
+    case studio
+    case builds
+    case github
+    case inspector
+    case network
+}
+
 struct WorkspaceDeveloperToolsView: View {
     @ObservedObject private var workspace: WorkspaceStore
     @StateObject private var github = WorkspaceGitHubModel()
+    @State private var selectedTab: WorkspaceDeveloperToolTab
 
-    init(store: WorkspaceStore) {
+    init(store: WorkspaceStore, initialTab: WorkspaceDeveloperToolTab = .studio) {
         _workspace = ObservedObject(wrappedValue: store)
+        _selectedTab = State(initialValue: initialTab)
     }
 
     var body: some View {
-        TabView {
+        TabView(selection: $selectedTab) {
             WorkspaceDevStudioView(store: workspace, github: github)
                 .tabItem { Label("Studio", systemImage: "hammer.fill") }
+                .tag(WorkspaceDeveloperToolTab.studio)
 
             WorkspaceBuildsView(github: github)
                 .tabItem { Label("Builds", systemImage: "play.circle.fill") }
+                .tag(WorkspaceDeveloperToolTab.builds)
 
             WorkspaceGitHubManagerView(github: github)
                 .tabItem { Label("GitHub", systemImage: "arrow.triangle.branch") }
+                .tag(WorkspaceDeveloperToolTab.github)
 
             WorkspaceInspectorView(store: workspace)
                 .tabItem { Label("Inspector", systemImage: "ladybug.fill") }
+                .tag(WorkspaceDeveloperToolTab.inspector)
 
             WorkspaceNetworkServicesView(store: workspace)
                 .tabItem { Label("Network", systemImage: "network") }
+                .tag(WorkspaceDeveloperToolTab.network)
         }
         .tint(.indigo)
     }
@@ -470,7 +485,11 @@ private struct WorkspaceProjectEditorView: View {
                     projects.save(source: source, for: project)
                     isDispatching = true
                     Task {
-                        await github.dispatch(target: target, project: project)
+                        guard let remotePath = await github.publish(project: project, source: source) else {
+                            isDispatching = false
+                            return
+                        }
+                        await github.dispatch(target: target, project: project, entryPath: remotePath)
                         isDispatching = false
                     }
                 } label: {
@@ -546,6 +565,10 @@ private struct WorkspaceGitHubRunsResponse: Decodable {
 
 private struct WorkspaceGitHubErrorResponse: Decodable {
     let message: String?
+}
+
+private struct WorkspaceGitHubContentResponse: Decodable {
+    let sha: String
 }
 
 struct WorkspaceGitHubConfiguration: Codable, Equatable {
@@ -657,7 +680,36 @@ final class WorkspaceGitHubModel: ObservableObject {
         }
     }
 
-    func dispatch(target: WorkspaceBuildTarget, project: WorkspaceDeveloperProject?) async {
+    func publish(project: WorkspaceDeveloperProject, source: String) async -> String? {
+        guard let parts = repositoryParts, prepareRequest() else { return nil }
+        isLoading = true
+        defer { isLoading = false }
+        let remotePath = "WorkspaceProjects/\(project.id.uuidString)/Sources/\(project.sourceFileName)"
+        let path = ["repos", parts.owner, parts.name, "contents"] + remotePath.split(separator: "/").map(String.init)
+        do {
+            var payload: [String: Any] = [
+                "message": "Update \(project.name) from Workspace",
+                "content": Data(source.utf8).base64EncodedString(),
+                "branch": branch.isEmpty ? "main" : branch
+            ]
+            if let existing = try? await request(path: path),
+               let current = try? Self.decoder.decode(WorkspaceGitHubContentResponse.self, from: existing) {
+                payload["sha"] = current.sha
+            }
+            _ = try await request(
+                path: path,
+                method: "PUT",
+                body: try JSONSerialization.data(withJSONObject: payload)
+            )
+            statusMessage = "Uploaded \(project.sourceFileName) to GitHub."
+            return remotePath
+        } catch {
+            statusMessage = error.localizedDescription
+            return nil
+        }
+    }
+
+    func dispatch(target: WorkspaceBuildTarget, project: WorkspaceDeveloperProject?, entryPath: String? = nil) async {
         guard let parts = repositoryParts, prepareRequest() else { return }
         isLoading = true
         defer { isLoading = false }
@@ -666,7 +718,7 @@ final class WorkspaceGitHubModel: ObservableObject {
             inputs["target"] = target.workflowValue
             if let project {
                 inputs["language"] = project.template.workflowLanguage
-                inputs["entry_path"] = inputs["entry_path"] ?? "Sources/\(project.sourceFileName)"
+                inputs["entry_path"] = entryPath ?? "Sources/\(project.sourceFileName)"
             } else {
                 inputs["language"] = inputs["language"] ?? "swift"
                 inputs["entry_path"] = inputs["entry_path"] ?? "Sources/main.swift"
@@ -1306,6 +1358,75 @@ struct WorkspaceNetworkServicesView: View {
                     bridge.start(rootDirectory: workspace.workspaceFilesDirectory)
                 }
             }
+        }
+    }
+}
+
+struct WorkspaceRemoteDesktopView: View {
+    @ObservedObject var store: WorkspaceStore
+    let onOpen: (VirtualApp) -> Void
+
+    private var moonlight: VirtualApp? {
+        store.liveContainerApps.first {
+            $0.displayName.localizedCaseInsensitiveContains("moonlight") ||
+            $0.bundleIdentifier.localizedCaseInsensitiveContains("moonlight")
+        }
+    }
+
+    private var installer: VirtualApp? {
+        store.homeApps.first { $0.systemApp == .installer }
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    HStack(spacing: 14) {
+                        Image(systemName: "rectangle.on.rectangle")
+                            .font(.title2.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: 52, height: 52)
+                            .background(.indigo, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Moonlight")
+                                .font(.title3.weight(.bold))
+                            Text("Launch a LiveContainer-managed remote desktop client")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(.vertical, 6)
+                }
+                .listRowBackground(Color.clear)
+
+                if let moonlight {
+                    Section("Installed client") {
+                        LabeledContent("App", value: moonlight.displayName)
+                        LabeledContent("Version", value: moonlight.version)
+                        Button {
+                            onOpen(moonlight)
+                        } label: {
+                            Label("Open Moonlight", systemImage: "play.fill")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                } else {
+                    ContentUnavailableView(
+                        "Moonlight is not installed",
+                        systemImage: "rectangle.on.rectangle",
+                        description: Text("Install a Moonlight IPA through Installer and choose LiveContainer. This launcher will detect and open it here."))
+                    if let installer {
+                        Button {
+                            onOpen(installer)
+                        } label: {
+                            Label("Open Installer", systemImage: "bag.fill")
+                        }
+                    }
+                }
+            }
+            .listStyle(.insetGrouped)
+            .navigationTitle("Remote Desktop")
         }
     }
 }

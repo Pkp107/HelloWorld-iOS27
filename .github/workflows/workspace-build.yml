@@ -1,0 +1,219 @@
+name: Workspace Project Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Build output
+        required: true
+        type: choice
+        options:
+          - windows-exe
+          - wasm
+          - ios-simulator
+          - ios-ipa
+      language:
+        description: Source language used by the project
+        required: true
+        type: choice
+        options:
+          - c
+          - cpp
+          - csharp
+          - python
+          - java
+          - javascript
+          - swift
+      entry_path:
+        description: Project-relative source entry point or project file
+        required: false
+        default: Sources/main.c
+      xcode_project:
+        description: Project-relative Xcode project for iOS targets
+        required: false
+        default: App.xcodeproj
+      xcode_scheme:
+        description: Xcode scheme for iOS targets
+        required: false
+        default: App
+      main_class:
+        description: Java main class for native Windows builds
+        required: false
+        default: Main
+
+jobs:
+  windows-exe:
+    if: inputs.target == 'windows-exe'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET
+        if: inputs.language == 'csharp'
+        uses: actions/setup-dotnet@v4
+
+      - name: Set up Python
+        if: inputs.language == 'python'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Set up GraalVM
+        if: inputs.language == 'java'
+        uses: graalvm/setup-graalvm@v1
+        with:
+          distribution: graalvm
+          java-version: '24'
+          components: native-image
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Swift
+        if: inputs.language == 'swift'
+        uses: compnerd/gha-setup-swift@main
+        with:
+          swift-version: '6.0.3'
+
+      - name: Build Windows executable
+        shell: pwsh
+        env:
+          WORKSPACE_LANGUAGE: ${{ inputs.language }}
+          WORKSPACE_ENTRY: ${{ inputs.entry_path }}
+          WORKSPACE_MAIN_CLASS: ${{ inputs.main_class }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          switch ($env:WORKSPACE_LANGUAGE) {
+            'c' {
+              cl /nologo /O2 "/Fe:dist\\WorkspaceProgram.exe" $env:WORKSPACE_ENTRY
+            }
+            'cpp' {
+              cl /nologo /O2 /EHsc "/Fe:dist\\WorkspaceProgram.exe" $env:WORKSPACE_ENTRY
+            }
+            'csharp' {
+              $projectRoot = Join-Path $env:RUNNER_TEMP 'workspace-dotnet'
+              dotnet new console --output $projectRoot --force --no-restore
+              Copy-Item $env:WORKSPACE_ENTRY (Join-Path $projectRoot 'Program.cs') -Force
+              dotnet publish $projectRoot -c Release -r win-x64 --self-contained true -o dist
+            }
+            'python' {
+              python -m pip install --upgrade pyinstaller
+              python -m PyInstaller --noconfirm --onefile --name WorkspaceProgram --distpath dist $env:WORKSPACE_ENTRY
+            }
+            'java' {
+              $classes = Join-Path $env:RUNNER_TEMP 'workspace-java-classes'
+              New-Item -ItemType Directory -Force -Path $classes | Out-Null
+              javac -d $classes $env:WORKSPACE_ENTRY
+              native-image -cp $classes $env:WORKSPACE_MAIN_CLASS WorkspaceProgram
+              Move-Item WorkspaceProgram.exe dist\\WorkspaceProgram.exe
+            }
+            'javascript' {
+              npx --yes esbuild $env:WORKSPACE_ENTRY --bundle --platform=node --outfile dist\\workspace.js
+              npx --yes pkg dist\\workspace.js --targets node22-win-x64 --output dist\\WorkspaceProgram.exe
+            }
+            'swift' {
+              swiftc $env:WORKSPACE_ENTRY -o dist\\WorkspaceProgram.exe
+            }
+            default {
+              throw "Windows EXE builds are not configured for $env:WORKSPACE_LANGUAGE."
+            }
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: workspace-windows-exe
+          path: dist
+          if-no-files-found: error
+
+  wasm:
+    if: inputs.target == 'wasm'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install WebAssembly compiler
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 4.0.9
+
+      - name: Build WebAssembly module
+        env:
+          WORKSPACE_LANGUAGE: ${{ inputs.language }}
+          WORKSPACE_ENTRY: ${{ inputs.entry_path }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          case "$WORKSPACE_LANGUAGE" in
+            c) emcc "$WORKSPACE_ENTRY" -O2 -sSTANDALONE_WASM -o dist/WorkspaceProgram.wasm ;;
+            cpp) em++ "$WORKSPACE_ENTRY" -O2 -sSTANDALONE_WASM -o dist/WorkspaceProgram.wasm ;;
+            *) echo "WASM builds currently support C and C++." >&2; exit 1 ;;
+          esac
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: workspace-wasm
+          path: dist/WorkspaceProgram.wasm
+
+  ios:
+    if: inputs.target == 'ios-simulator' || inputs.target == 'ios-ipa'
+    runs-on: xcode-27
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select iOS SDK
+        run: |
+          set -euo pipefail
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - name: Build simulator app
+        if: inputs.target == 'ios-simulator'
+        env:
+          PROJECT: ${{ inputs.xcode_project }}
+          SCHEME: ${{ inputs.xcode_scheme }}
+        run: |
+          set -euo pipefail
+          xcodebuild build \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Archive device IPA
+        if: inputs.target == 'ios-ipa'
+        env:
+          PROJECT: ${{ inputs.xcode_project }}
+          SCHEME: ${{ inputs.xcode_scheme }}
+        run: |
+          set -euo pipefail
+          xcodebuild archive \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/WorkspaceProject.xcarchive" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO
+          app_path="$(find "$RUNNER_TEMP/WorkspaceProject.xcarchive/Products/Applications" -maxdepth 1 -name '*.app' -print -quit)"
+          test -n "$app_path"
+          mkdir -p "$RUNNER_TEMP/ipa/Payload"
+          cp -R "$app_path" "$RUNNER_TEMP/ipa/Payload/"
+          (cd "$RUNNER_TEMP/ipa" && zip -qry "$GITHUB_WORKSPACE/WorkspaceProject-unsigned.ipa" Payload)
+
+      - name: Upload simulator app
+        if: inputs.target == 'ios-simulator'
+        uses: actions/upload-artifact@v4
+        with:
+          name: workspace-ios-simulator
+          path: ${{ runner.temp }}/DerivedData/Build/Products/Debug-iphonesimulator
+          if-no-files-found: error
+
+      - name: Upload device IPA
+        if: inputs.target == 'ios-ipa'
+        uses: actions/upload-artifact@v4
+        with:
+          name: workspace-ios-unsigned-ipa
+          path: WorkspaceProject-unsigned.ipa
+          if-no-files-found: error

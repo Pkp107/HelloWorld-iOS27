@@ -326,6 +326,16 @@ struct RuntimeWindow: View {
             InstallerView(store: store, onOpen: onOpen)
         case .fileManager:
             WorkspaceFileManagerView(store: store)
+        case .devStudio:
+            WorkspaceDeveloperToolsView(store: store, initialTab: .studio)
+        case .github:
+            WorkspaceDeveloperToolsView(store: store, initialTab: .github)
+        case .inspector:
+            WorkspaceDeveloperToolsView(store: store, initialTab: .inspector)
+        case .network:
+            WorkspaceDeveloperToolsView(store: store, initialTab: .network)
+        case .remoteDesktop:
+            WorkspaceRemoteDesktopView(store: store, onOpen: onOpen)
         case .liveContainerSettings:
             // Kept only so an app record from an older workspace build can
             // still open. New launchers expose these controls inside Settings.

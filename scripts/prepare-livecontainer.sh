@@ -20,6 +20,9 @@ mkdir -p "${SHELL_ROOT}"
 cp "${ROOT_DIR}/ContentView.swift" "${SHELL_ROOT}/ContentView.swift"
 cp "${ROOT_DIR}/VirtualOS.swift" "${SHELL_ROOT}/VirtualOS.swift"
 cp "${ROOT_DIR}/WorkspaceViews.swift" "${SHELL_ROOT}/WorkspaceViews.swift"
+cp "${ROOT_DIR}/WorkspaceModules.swift" "${SHELL_ROOT}/WorkspaceModules.swift"
+cp "${ROOT_DIR}/DeveloperTools.swift" "${SHELL_ROOT}/DeveloperTools.swift"
+cp "${ROOT_DIR}/WorkspaceMCPServer.swift" "${SHELL_ROOT}/WorkspaceMCPServer.swift"
 cp "${ROOT_DIR}/LiveContainerRuntime.swift" "${SHELL_ROOT}/LiveContainerRuntime.swift"
 cp "${ROOT_DIR}/NativeWorkspaceViews.swift" "${SHELL_ROOT}/NativeWorkspaceViews.swift"
 cp "${ROOT_DIR}/NativeWorkspaceInstaller.swift" "${SHELL_ROOT}/NativeWorkspaceInstaller.swift"
@@ -49,7 +52,7 @@ cp "${ROOT_DIR}/NativeLCTabView.swift" "${BUILD_ROOT}/LiveContainerSwiftUI/Views
 
 /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName Workspace" "${BUILD_ROOT}/LiveContainer/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleName Workspace" "${BUILD_ROOT}/LiveContainer/Info.plist"
-/usr/libexec/PlistBuddy -c "Add :NSLocalNetworkUsageDescription string Workspace hosts signed IPA installers locally on this device." "${BUILD_ROOT}/LiveContainer/Info.plist" 2>/dev/null || true
+/usr/libexec/PlistBuddy -c "Add :NSLocalNetworkUsageDescription string Workspace uses the local network for IPA installation, development servers, and its authenticated workspace file bridge." "${BUILD_ROOT}/LiveContainer/Info.plist" 2>/dev/null || true
 /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" "${BUILD_ROOT}/LiveContainer/Info.plist" 2>/dev/null || true
 /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsLocalNetworking bool true" "${BUILD_ROOT}/LiveContainer/Info.plist" 2>/dev/null || true
 # Keep this host distinct from an installed upstream LiveContainer.

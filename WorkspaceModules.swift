@@ -232,6 +232,9 @@ struct WorkspaceModulesView: View {
     @ObservedObject var store: WorkspaceModuleStore
 
     private var enabledCount: Int { store.enabled.count }
+    private var categories: [String] {
+        Array(Set(store.modules.map(\.category))).sorted()
+    }
 
     var body: some View {
         List {
@@ -249,9 +252,11 @@ struct WorkspaceModulesView: View {
                 .padding(.vertical, 4)
             }
 
-            ForEach(store.modules) { module in
-                Section(module.category) {
-                    moduleRow(module)
+            ForEach(categories, id: \.self) { category in
+                Section(category) {
+                    ForEach(store.modules.filter { $0.category == category }) { module in
+                        moduleRow(module)
+                    }
                 }
             }
 
