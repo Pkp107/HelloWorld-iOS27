@@ -638,7 +638,7 @@ final class WorkspaceGitHubModel: ObservableObject {
     }
 
     func loadRepositories() async {
-        guard prepareRequest() else { return }
+        guard prepareRequest(requireRepository: false) else { return }
         isLoading = true
         defer { isLoading = false }
         do {
@@ -692,7 +692,10 @@ final class WorkspaceGitHubModel: ObservableObject {
                 "content": Data(source.utf8).base64EncodedString(),
                 "branch": branch.isEmpty ? "main" : branch
             ]
-            if let existing = try? await request(path: path),
+            if let existing = try? await request(
+                path: path,
+                query: ["ref": branch.isEmpty ? "main" : branch]
+            ),
                let current = try? Self.decoder.decode(WorkspaceGitHubContentResponse.self, from: existing) {
                 payload["sha"] = current.sha
             }
@@ -745,12 +748,12 @@ final class WorkspaceGitHubModel: ObservableObject {
         saveConfiguration()
     }
 
-    private func prepareRequest() -> Bool {
+    private func prepareRequest(requireRepository: Bool = true) -> Bool {
         guard !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             statusMessage = "Add a GitHub token before connecting."
             return false
         }
-        guard repositoryParts != nil else {
+        guard !requireRepository || repositoryParts != nil else {
             statusMessage = "Enter a repository as owner/repository."
             return false
         }
@@ -1314,10 +1317,27 @@ struct WorkspaceNetworkServicesView: View {
             set: { enabled in
                 settings.configuration.mcpEnabled = enabled
                 if enabled {
-                    bridge.start(rootDirectory: workspace.workspaceFilesDirectory)
+                    bridge.start(
+                        rootDirectory: workspace.workspaceFilesDirectory,
+                        advertiseOnLAN: settings.configuration.advertiseOnLAN
+                    )
                 } else {
                     bridge.stop()
                 }
+            }
+        )
+    }
+
+    private var advertiseOnLAN: Binding<Bool> {
+        Binding(
+            get: { settings.configuration.advertiseOnLAN },
+            set: { value in
+                settings.configuration.advertiseOnLAN = value
+                guard bridge.isRunning else { return }
+                bridge.start(
+                    rootDirectory: workspace.workspaceFilesDirectory,
+                    advertiseOnLAN: value
+                )
             }
         )
     }
@@ -1327,7 +1347,7 @@ struct WorkspaceNetworkServicesView: View {
             Form {
                 Section("Local services") {
                     Toggle("Enable MCP sandbox bridge", isOn: mcpEnabled)
-                    Toggle("Advertise on local network", isOn: $settings.configuration.advertiseOnLAN)
+                    Toggle("Advertise on local network", isOn: advertiseOnLAN)
                         .disabled(!bridge.isRunning)
                     LabeledContent("Status", value: bridge.statusMessage)
                 }
@@ -1355,7 +1375,10 @@ struct WorkspaceNetworkServicesView: View {
             .navigationTitle("Network Services")
             .onAppear {
                 if settings.configuration.mcpEnabled, !bridge.isRunning {
-                    bridge.start(rootDirectory: workspace.workspaceFilesDirectory)
+                    bridge.start(
+                        rootDirectory: workspace.workspaceFilesDirectory,
+                        advertiseOnLAN: settings.configuration.advertiseOnLAN
+                    )
                 }
             }
         }

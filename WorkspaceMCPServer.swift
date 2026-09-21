@@ -30,12 +30,18 @@ final class WorkspaceMCPServer: ObservableObject {
         }
     }
 
-    func start(rootDirectory: URL) {
+    func start(rootDirectory: URL, advertiseOnLAN: Bool = false) {
         stop()
-        self.rootDirectory = rootDirectory.standardizedFileURL
         do {
             try fileManager.createDirectory(at: rootDirectory, withIntermediateDirectories: true)
+            self.rootDirectory = rootDirectory.resolvingSymlinksInPath().standardizedFileURL
             let listener = try NWListener(using: .tcp, on: .any)
+            if !advertiseOnLAN {
+                listener.parameters.requiredLocalEndpoint = .hostPort(
+                    host: NWEndpoint.Host("127.0.0.1"),
+                    port: .any
+                )
+            }
             listener.stateUpdateHandler = { [weak self, weak listener] state in
                 Task { @MainActor in
                     guard let self else { return }
@@ -45,7 +51,7 @@ final class WorkspaceMCPServer: ObservableObject {
                             self.statusMessage = "The bridge could not acquire a port."
                             return
                         }
-                        let host = Self.preferredHostAddress() ?? "127.0.0.1"
+                        let host = advertiseOnLAN ? (Self.preferredHostAddress() ?? "127.0.0.1") : "127.0.0.1"
                         self.endpoint = URL(string: "http://\(host):\(port)")
                         self.isRunning = true
                         self.statusMessage = "Listening on \(host):\(port)"
@@ -115,10 +121,13 @@ final class WorkspaceMCPServer: ObservableObject {
 
         let method = String(start[0])
         let rawPath = String(start[1])
-        let headers = Dictionary(uniqueKeysWithValues: lines.dropFirst().compactMap { line -> (String, String)? in
-            guard let split = line.firstIndex(of: ":") else { return nil }
-            return (line[..<split].lowercased(), line[line.index(after: split)...].trimmingCharacters(in: .whitespaces))
-        })
+        var headers: [String: String] = [:]
+        for line in lines.dropFirst() {
+            guard let split = line.firstIndex(of: ":") else { continue }
+            let name = String(line[..<split]).lowercased()
+            let value = String(line[line.index(after: split)...]).trimmingCharacters(in: .whitespaces)
+            if headers[name] == nil { headers[name] = value }
+        }
         let path = rawPath.split(separator: "?", maxSplits: 1).first.map(String.init) ?? rawPath
 
         if path == "/health" && method == "GET" {
@@ -237,9 +246,11 @@ final class WorkspaceMCPServer: ObservableObject {
         guard !pieces.contains(".."), !relativePath.hasPrefix("/") else {
             throw MCPError.message("Path must stay inside Workspace Files.")
         }
-        let url = pieces.reduce(rootDirectory) { partial, piece in
+        let candidate = pieces.reduce(rootDirectory) { partial, piece in
             partial.appendingPathComponent(String(piece), isDirectory: false)
         }.standardizedFileURL
+        let resolvedParent = candidate.deletingLastPathComponent().resolvingSymlinksInPath().standardizedFileURL
+        let url = (fileManager.fileExists(atPath: candidate.path) ? candidate.resolvingSymlinksInPath() : resolvedParent.appendingPathComponent(candidate.lastPathComponent)).standardizedFileURL
         let root = rootDirectory.path.hasSuffix("/") ? rootDirectory.path : rootDirectory.path + "/"
         guard url == rootDirectory || url.path.hasPrefix(root) else {
             throw MCPError.message("Path must stay inside Workspace Files.")
@@ -250,7 +261,9 @@ final class WorkspaceMCPServer: ObservableObject {
     private func relativePath(for url: URL) -> String {
         guard let rootDirectory else { return url.lastPathComponent }
         let root = rootDirectory.path.hasSuffix("/") ? rootDirectory.path : rootDirectory.path + "/"
-        return url.path.replacingOccurrences(of: root, with: "")
+        if url == rootDirectory { return "" }
+        guard url.path.hasPrefix(root) else { return url.lastPathComponent }
+        return String(url.path.dropFirst(root.count))
     }
 
     private func json(_ object: Any) -> Data {

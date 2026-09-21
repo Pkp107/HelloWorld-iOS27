@@ -48,6 +48,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up MSVC environment
+        if: inputs.language == 'c' || inputs.language == 'cpp'
+        uses: ilammy/msvc-dev-cmd@v1
+
       - name: Set up .NET
         if: inputs.language == 'csharp'
         uses: actions/setup-dotnet@v4
@@ -57,6 +61,12 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.13'
+
+      - name: Set up Node.js
+        if: inputs.language == 'javascript'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
 
       - name: Set up GraalVM
         if: inputs.language == 'java'
@@ -108,7 +118,7 @@ jobs:
             }
             'javascript' {
               npx --yes esbuild $env:WORKSPACE_ENTRY --bundle --platform=node --outfile dist\\workspace.js
-              npx --yes pkg dist\\workspace.js --targets node22-win-x64 --output dist\\WorkspaceProgram.exe
+              npx --yes pkg@5.8.1 dist\\workspace.js --targets node20-win-x64 --output dist\\WorkspaceProgram.exe
             }
             'swift' {
               swiftc $env:WORKSPACE_ENTRY -o dist\\WorkspaceProgram.exe
