@@ -420,7 +420,7 @@ struct NativeIPASignerView: View {
     private func openLocalInstallPage(_ url: URL) {
         UIApplication.shared.open(url) { accepted in
             if !accepted {
-                localServer.statusMessage = "iOS could not open the local installer page. Try the external HTTPS or SideStore handoff."
+                localServer.reportStatus("iOS could not open the local installer page. Try the external HTTPS or SideStore handoff.")
             }
         }
     }

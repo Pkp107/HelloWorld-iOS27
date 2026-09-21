@@ -74,6 +74,12 @@ final class LocalInstallServer: ObservableObject {
         manifestURL = nil
     }
 
+    /// Allows the hosting UI to surface a handoff failure without exposing
+    /// the published state for arbitrary mutation.
+    func reportStatus(_ message: String) {
+        statusMessage = message
+    }
+
     private func beginBackgroundTask() {
         guard backgroundTask == .invalid else { return }
         backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Workspace IPA installation") { [weak self] in
@@ -133,8 +139,9 @@ final class LocalInstallServer: ObservableObject {
     }
 
     private func httpResponse(status: String, type: String, body: Data) -> Data {
-        var header = "HTTP/1.1 " + status + "\r\nContent-Type: " + type + "\r\nContent-Length: " + String(body.count) + "\r\nConnection: close\r\n\r\n"
-            .data(using: .utf8) ?? Data()
+        let contentLength = String(body.count)
+        let headerText = "HTTP/1.1 \(status)\r\nContent-Type: \(type)\r\nContent-Length: \(contentLength)\r\nConnection: close\r\n\r\n"
+        var header = headerText.data(using: .utf8) ?? Data()
         header.append(body)
         return header
     }
