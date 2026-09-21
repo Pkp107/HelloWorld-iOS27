@@ -92,6 +92,7 @@ final class WorkspaceLocalhostServerModel: ObservableObject {
                 connection.stateUpdateHandler = { [weak self, weak connection] state in
                     guard case .ready = state else { return }
                     Task { @MainActor in
+                        guard let connection else { return }
                         self?.serve(connection)
                     }
                 }
