@@ -91,13 +91,22 @@ final class NativeWorkspaceHomeLauncher: NSObject, ObservableObject, LCAppModelD
 
     func launch(_ app: LCAppModel) {
         app.delegate = self
+        let bundleIdentifier = app.appInfo.bundleIdentifier() ?? ""
+        WorkspaceGuestSessionStore.shared.start(
+            appName: app.displayName,
+            bundleIdentifier: bundleIdentifier
+        )
         Task {
             do {
                 try await app.runApp()
                 try? await Task.sleep(nanoseconds: 350_000_000)
-                WorkspaceGuestHomeOverlayController.shared.show()
+                WorkspaceGuestSplitOverlayController.shared.show(
+                    appName: app.displayName,
+                    bundleIdentifier: bundleIdentifier
+                )
             } catch {
                 errorMessage = error.localizedDescription
+                WorkspaceGuestSessionStore.shared.stop(reason: error.localizedDescription)
             }
         }
     }
@@ -803,6 +812,11 @@ final class NativeIPASigningEngine: ObservableObject {
               !bundleIdentifier.isEmpty else {
             throw NativeIPASigningError.missingBundleIdentifier
         }
+
+        try WorkspaceSigningValidation.validate(
+            bundleIdentifier: bundleIdentifier,
+            provisioningProfile: provisioningProfile
+        )
 
         try provisioningProfile.write(to: appURL.appendingPathComponent("embedded.mobileprovision"), options: [.atomic])
         try await withCheckedThrowingContinuation { continuation in

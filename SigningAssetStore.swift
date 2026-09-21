@@ -2,6 +2,29 @@ import Foundation
 import Combine
 import UniformTypeIdentifiers
 
+enum WorkspaceSigningValidation {
+    static func validate(bundleIdentifier: String, provisioningProfile: Data) throws {
+        let profileText = String(decoding: provisioningProfile, as: UTF8.self)
+        guard profileText.contains("application-identifier") else { return }
+        let exactID = Data(bundleIdentifier.utf8)
+        let wildcardID = Data("*".utf8)
+        guard provisioningProfile.range(of: exactID) != nil || provisioningProfile.range(of: wildcardID) != nil else {
+            throw WorkspaceSigningValidationError.bundleIdentifierNotCovered(bundleIdentifier)
+        }
+    }
+}
+
+private enum WorkspaceSigningValidationError: LocalizedError {
+    case bundleIdentifierNotCovered(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .bundleIdentifierNotCovered(let bundleIdentifier):
+            return "The provisioning profile does not cover \(bundleIdentifier). Choose a matching App ID profile."
+        }
+    }
+}
+
 enum WorkspaceCertificatePasswordStore {
     private static let key = "Workspace.CertificatePassword"
     private static let liveContainerKey = "LCCertificatePassword"

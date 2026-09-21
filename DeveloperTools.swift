@@ -11,6 +11,7 @@ enum WorkspaceDeveloperToolTab: Hashable {
     case github
     case inspector
     case network
+    case services
 }
 
 struct WorkspaceDeveloperToolsView: View {
@@ -44,6 +45,10 @@ struct WorkspaceDeveloperToolsView: View {
             WorkspaceNetworkServicesView(store: workspace)
                 .tabItem { Label("Network", systemImage: "network") }
                 .tag(WorkspaceDeveloperToolTab.network)
+
+            WorkspaceAdvancedServicesView(store: workspace)
+                .tabItem { Label("Services", systemImage: "server.rack") }
+                .tag(WorkspaceDeveloperToolTab.services)
         }
         .tint(.indigo)
     }
@@ -136,6 +141,7 @@ enum WorkspaceProjectTemplate: String, CaseIterable, Codable, Identifiable {
 enum WorkspaceBuildTarget: String, CaseIterable, Codable, Identifiable {
     case wasm
     case windowsEXE
+    case macOSApp
     case iosSimulator
     case iphoneIPA
 
@@ -145,6 +151,7 @@ enum WorkspaceBuildTarget: String, CaseIterable, Codable, Identifiable {
         switch self {
         case .wasm: return "WebAssembly"
         case .windowsEXE: return "Windows EXE"
+        case .macOSApp: return "macOS App"
         case .iosSimulator: return "iOS Simulator"
         case .iphoneIPA: return "iPhone IPA"
         }
@@ -154,6 +161,7 @@ enum WorkspaceBuildTarget: String, CaseIterable, Codable, Identifiable {
         switch self {
         case .wasm: return "shippingbox.fill"
         case .windowsEXE: return "desktopcomputer"
+        case .macOSApp: return "laptopcomputer"
         case .iosSimulator: return "iphone.gen3"
         case .iphoneIPA: return "iphone.and.arrow.forward"
         }
@@ -163,6 +171,7 @@ enum WorkspaceBuildTarget: String, CaseIterable, Codable, Identifiable {
         switch self {
         case .wasm: return "wasm"
         case .windowsEXE: return "windows-exe"
+        case .macOSApp: return "macos-app"
         case .iosSimulator: return "ios-simulator"
         case .iphoneIPA: return "ios-ipa"
         }

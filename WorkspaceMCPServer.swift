@@ -134,12 +134,77 @@ final class WorkspaceMCPServer: ObservableObject {
             return httpResponse(body: json([
                 "name": "Workspace MCP Bridge",
                 "status": "ok",
-                "tools": ["list_files", "read_file", "copy_file", "move_file", "delete_file", "make_directory"]
+                "tools": ["list_files", "read_file", "copy_file", "move_file", "delete_file", "make_directory", "guest_session", "guest_logs", "guest_eval"]
             ]))
         }
 
         guard headers["authorization"] == "Bearer \(accessToken)" else {
             return httpResponse(status: "401 Unauthorized", body: json(["error": "Bearer token required"]))
+        }
+
+        if path == "/guest/session" && method == "GET" {
+            return httpResponse(body: json(WorkspaceGuestSessionStore.shared.snapshot()))
+        }
+
+        if path == "/guest/logs" && method == "GET" {
+            let session = WorkspaceGuestSessionStore.shared
+            let logs = session.logs.map { [
+                "id": $0.id.uuidString,
+                "date": $0.date.ISO8601Format(),
+                "level": $0.level,
+                "message": $0.message
+            ] }
+            return httpResponse(body: json([
+                "app": session.appName ?? "",
+                "bundleIdentifier": session.bundleIdentifier ?? "",
+                "active": session.isActive,
+                "logs": logs
+            ]))
+        }
+
+        if path == "/guest/eval" && method == "POST",
+           let bodyData = bodyText.data(using: .utf8),
+           let payload = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any],
+           let code = payload["code"] as? String,
+           !code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let session = WorkspaceGuestSessionStore.shared
+            guard session.isActive else {
+                return httpResponse(status: "409 Conflict", body: json(["error": "No LiveContainer guest is active."]))
+            }
+            let id = session.submitEvaluation(code)
+            return httpResponse(status: "202 Accepted", body: json([
+                "id": id.uuidString,
+                "status": "queued",
+                "note": "The Frida Gadget bridge must consume /guest/pending and post the result to /guest/result."
+            ]))
+        }
+
+        if path == "/guest/pending" && method == "GET" {
+            let pending = WorkspaceGuestSessionStore.shared.evaluations
+                .filter { $0.result == nil && $0.error == nil }
+                .map { ["id": $0.id.uuidString, "code": $0.code] }
+            return httpResponse(body: json(["evaluations": pending]))
+        }
+
+        if path == "/guest/result" && method == "POST",
+           let bodyData = bodyText.data(using: .utf8),
+           let payload = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any],
+           let rawID = payload["id"] as? String,
+           let id = UUID(uuidString: rawID) {
+            WorkspaceGuestSessionStore.shared.completeEvaluation(
+                id: id,
+                result: payload["result"] as? String,
+                error: payload["error"] as? String
+            )
+            return httpResponse(body: json(["ok": true]))
+        }
+
+        if path == "/guest/log" && method == "POST",
+           let bodyData = bodyText.data(using: .utf8),
+           let payload = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any],
+           let message = payload["message"] as? String {
+            WorkspaceGuestSessionStore.shared.appendLog(message, level: payload["level"] as? String ?? "info")
+            return httpResponse(body: json(["ok": true]))
         }
 
         if path == "/tools" && method == "GET" {
@@ -150,7 +215,10 @@ final class WorkspaceMCPServer: ObservableObject {
                     ["name": "copy_file", "arguments": ["source", "destination"]],
                     ["name": "move_file", "arguments": ["source", "destination"]],
                     ["name": "delete_file", "arguments": ["path"]],
-                    ["name": "make_directory", "arguments": ["path"]]
+                    ["name": "make_directory", "arguments": ["path"]],
+                    ["name": "guest_session", "arguments": []],
+                    ["name": "guest_logs", "arguments": []],
+                    ["name": "guest_eval", "arguments": ["code"]]
                 ]
             ]))
         }
@@ -169,6 +237,36 @@ final class WorkspaceMCPServer: ObservableObject {
     private func toolResponse(tool: String, arguments: [String: Any]) -> Data {
         do {
             switch tool {
+            case "guest_session":
+                return httpResponse(body: json(WorkspaceGuestSessionStore.shared.snapshot()))
+
+            case "guest_logs":
+                let session = WorkspaceGuestSessionStore.shared
+                let logs = session.logs.map { [
+                    "id": $0.id.uuidString,
+                    "date": $0.date.ISO8601Format(),
+                    "level": $0.level,
+                    "message": $0.message
+                ] }
+                return httpResponse(body: json([
+                    "app": session.appName ?? "",
+                    "bundleIdentifier": session.bundleIdentifier ?? "",
+                    "active": session.isActive,
+                    "logs": logs
+                ]))
+
+            case "guest_eval":
+                let code = try requiredArgument("code", in: arguments)
+                guard WorkspaceGuestSessionStore.shared.isActive else {
+                    throw MCPError.message("No LiveContainer guest is active.")
+                }
+                let id = WorkspaceGuestSessionStore.shared.submitEvaluation(code)
+                return httpResponse(status: "202 Accepted", body: json([
+                    "id": id.uuidString,
+                    "status": "queued",
+                    "next": "/guest/pending"
+                ]))
+
             case "list_files":
                 let directory = try securedURL(arguments["path"] as? String ?? "")
                 let urls = try fileManager.contentsOfDirectory(

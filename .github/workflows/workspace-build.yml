@@ -9,6 +9,7 @@ on:
         type: choice
         options:
           - windows-exe
+          - macos-app
           - wasm
           - ios-simulator
           - ios-ipa
@@ -29,13 +30,13 @@ on:
         required: false
         default: Sources/main.c
       xcode_project:
-        description: Project-relative Xcode project for iOS targets
+        description: Existing Xcode project for the selected Apple target
         required: false
-        default: App.xcodeproj
+        default: HelloWorld.xcodeproj
       xcode_scheme:
-        description: Xcode scheme for iOS targets
+        description: Xcode scheme for the selected Apple target
         required: false
-        default: App
+        default: HelloWorld
       main_class:
         description: Java main class for native Windows builds
         required: false
@@ -162,6 +163,34 @@ jobs:
         with:
           name: workspace-wasm
           path: dist/WorkspaceProgram.wasm
+
+  macos:
+    if: inputs.target == 'macos-app'
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build macOS app
+        env:
+          PROJECT: ${{ inputs.xcode_project }}
+          SCHEME: ${{ inputs.xcode_scheme }}
+        run: |
+          set -euo pipefail
+          test -f "$PROJECT/project.pbxproj" || { echo "The macOS target requires an existing macOS-compatible Xcode project." >&2; exit 1; }
+          echo "Building $PROJECT / $SCHEME for macOS. This repository's default HelloWorld target is iOS-only; pass a macOS project when dispatching macos-app."
+          xcodebuild build \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk macosx \
+            -derivedDataPath "$RUNNER_TEMP/MacDerivedData" \
+            CODE_SIGNING_ALLOWED=NO
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: workspace-macos-app
+          path: ${{ runner.temp }}/MacDerivedData/Build/Products/Release/*.app
+          if-no-files-found: error
 
   ios:
     if: inputs.target == 'ios-simulator' || inputs.target == 'ios-ipa'
