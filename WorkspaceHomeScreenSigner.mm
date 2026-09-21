@@ -2,6 +2,8 @@
 #include "macho.h"
 #include "openssl.h"
 
+void refreshFile(NSString *path);
+
 @implementation ZSigner (WorkspaceHomeScreenSigning)
 
 + (NSProgress *)workspaceSignHomeScreenAppAtPath:(NSString *)appPath
