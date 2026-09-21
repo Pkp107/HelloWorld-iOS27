@@ -293,6 +293,7 @@ struct WorkspaceModulesView: View {
                     .foregroundStyle(.tertiary)
                 }
             }
+        }
         .accessibilityHint("Enable or disable the \(module.title) module")
     }
 }
