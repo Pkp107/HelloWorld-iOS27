@@ -543,16 +543,32 @@ private struct InstallerInstallChoiceView: View {
 #if LIVE_CONTAINER_NATIVE
             .onChange(of: signer.signedIPAURL) { _, url in
                 guard let url else { return }
-                localServer.start(
-                    packageURL: url,
-                    appInfo: signer.signedAppInfo ?? SignedAppInstallInfo(
-                        bundleIdentifier: app.bundleIdentifier,
-                        version: app.version,
-                        displayName: app.name
-                    )
+                let appInfo = signer.signedAppInfo ?? SignedAppInstallInfo(
+                    bundleIdentifier: app.bundleIdentifier,
+                    version: app.version,
+                    displayName: app.name
                 )
-                statusMessage = "Signed IPA ready. Opening the phone installer..."
-                isWorking = false
+                if !WorkspacePiConfiguration.token.isEmpty {
+                    statusMessage = "Uploading signed IPA to Workspace Pi..."
+                    Task { @MainActor in
+                        do {
+                            let result = try await WorkspacePiInstaller.upload(ipaURL: url, appInfo: appInfo)
+                            statusMessage = "Workspace Pi is ready. Opening the iOS installer..."
+                            UIApplication.shared.open(result.otaURL) { accepted in
+                                if !accepted {
+                                    statusMessage = "The Pi upload succeeded, but iOS could not open the installer URL. Open Install on device Home Screen to retry."
+                                }
+                            }
+                        } catch {
+                            statusMessage = "Pi upload failed: \(error.localizedDescription). Open Install on device Home Screen for manual setup."
+                        }
+                        isWorking = false
+                    }
+                } else {
+                    statusMessage = "Signed IPA ready. Configure Workspace Pi in Install on device Home Screen."
+                    isWorking = false
+                    showingInstallHandoff = true
+                }
             }
             .onChange(of: localServer.otaURL) { _, url in
                 guard mode == .sign, let url else { return }

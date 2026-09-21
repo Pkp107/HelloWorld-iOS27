@@ -18,6 +18,10 @@ The integrated artifact is assembled from pinned upstream LiveContainer sources,
 
 The IPA Signer app has its own IPA picker and copies the selected certificate and provisioning profile into protected, app-owned storage. Those signing assets can be imported during setup and are also reused for certificate-based JIT. A compatible certificate and provisioning profile are still required for signing.
 
+## Private Pi HTTPS handoff
+
+Workspace can upload a signed IPA to a private Raspberry Pi host and open the returned HTTPS OTA manifest. The reference host listens on port `8072`; keep any other project on its existing port and tunnel. Copy `scripts/workspace_pi_server.py` and `scripts/start-workspace-pi.sh` to the Pi, then start the service with `WORKSPACE_PUBLIC_BASE_URL` set to the dedicated Cloudflare URL and `WORKSPACE_UPLOAD_TOKEN` set to a randomly generated secret. Start a separate `cloudflared tunnel --url http://127.0.0.1:8072` process for that service. Enter the same HTTPS URL and token in Installer's Workspace Pi handoff screen. The token is stored only in the app's local preferences and is not committed to this repository.
+
 Installer accepts local IPAs and stores custom HTTP/HTTPS repository URLs for AltStore, SideStore, eSign, or KSign-compatible feeds. The source detail screen opens a feed in Safari or Files; the native LiveContainer importer performs the actual guest installation in the integrated artifact.
 
 LiveContainer is AGPLv3. If its source is integrated into this public repository, preserve the upstream license and corresponding source obligations.

@@ -470,6 +470,10 @@ struct WorkspaceInstallHandoffView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var hostedIPAURL = ""
     @State private var hostedManifestURL = ""
+    @State private var piBaseURL = WorkspacePiConfiguration.baseURL
+    @State private var piToken = WorkspacePiConfiguration.token
+    @State private var isUploadingToPi = false
+    @State private var piInstallURL: URL?
     @State private var errorMessage: String?
 
     var body: some View {
@@ -501,6 +505,32 @@ struct WorkspaceInstallHandoffView: View {
                         openOTA()
                     }
                     .disabled(!isHTTPS(hostedManifestURL))
+                }
+
+                Section("Workspace Pi") {
+                    Text("Upload the signed IPA to the private Pi HTTPS host, then open its signed manifest in iOS. This uses a separate service and tunnel from your other Pi project.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    TextField("https://your-workspace-tunnel.trycloudflare.com", text: $piBaseURL)
+                        .textInputAutocapitalization(.never)
+                        .keyboardType(.URL)
+                        .autocorrectionDisabled()
+                    SecureField("Workspace Pi upload token", text: $piToken)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    Button {
+                        uploadToPi()
+                    } label: {
+                        Label(isUploadingToPi ? "Uploading signed IPA..." : "Upload and install from Workspace Pi", systemImage: "server.rack")
+                    }
+                    .disabled(isUploadingToPi || !isHTTPS(piBaseURL) || piToken.isEmpty)
+                    if let piInstallURL {
+                        Button {
+                            UIApplication.shared.open(piInstallURL)
+                        } label: {
+                            Label("Open Pi Home Screen installer", systemImage: "iphone.and.arrow.forward")
+                        }
+                    }
                 }
 
                 Section("Local transfer") {
@@ -553,6 +583,130 @@ struct WorkspaceInstallHandoffView: View {
         UIApplication.shared.open(url) { accepted in
             if !accepted { errorMessage = "iOS could not open the OTA installation link." }
         }
+    }
+
+    private func uploadToPi() {
+        isUploadingToPi = true
+        errorMessage = nil
+        WorkspacePiConfiguration.save(baseURL: piBaseURL, token: piToken)
+        Task { @MainActor in
+            do {
+                let result = try await WorkspacePiInstaller.upload(
+                    ipaURL: ipaURL,
+                    appInfo: SignedAppInstallInfo(
+                        bundleIdentifier: "com.pkp107.workspace.signed",
+                        version: "1.0",
+                        displayName: ipaURL.deletingPathExtension().lastPathComponent
+                    ),
+                    baseURL: piBaseURL,
+                    token: piToken
+                )
+                piInstallURL = result.otaURL
+                UIApplication.shared.open(result.otaURL) { accepted in
+                    if !accepted {
+                        errorMessage = "The Pi upload succeeded, but iOS could not open the installer URL. Tap Open Pi Home Screen installer to retry."
+                    }
+                }
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            isUploadingToPi = false
+        }
+    }
+}
+
+struct WorkspacePiInstallResult: Decodable, Sendable {
+    let ipaURL: URL
+    let manifestURL: URL
+    let otaURL: URL
+}
+
+enum WorkspacePiConfiguration {
+    private static let baseURLKey = "Workspace.PiBaseURL"
+    private static let tokenKey = "Workspace.PiUploadToken"
+
+    // The Pi service runs on its own port and tunnel. These defaults are
+    // replaceable in the handoff screen when a quick tunnel is regenerated.
+    static let defaultBaseURL = "https://perfume-halo-technological-scripts.trycloudflare.com"
+    static let defaultToken = ""
+
+    static var baseURL: String {
+        UserDefaults.standard.string(forKey: baseURLKey) ?? defaultBaseURL
+    }
+
+    static var token: String {
+        UserDefaults.standard.string(forKey: tokenKey) ?? defaultToken
+    }
+
+    static func save(baseURL: String, token: String) {
+        UserDefaults.standard.set(baseURL.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/")), forKey: baseURLKey)
+        UserDefaults.standard.set(token.trimmingCharacters(in: .whitespacesAndNewlines), forKey: tokenKey)
+    }
+}
+
+enum WorkspacePiInstaller {
+    static func upload(
+        ipaURL: URL,
+        appInfo: SignedAppInstallInfo,
+        baseURL: String = WorkspacePiConfiguration.baseURL,
+        token: String = WorkspacePiConfiguration.token
+    ) async throws -> WorkspacePiInstallResult {
+        let trimmedBaseURL = baseURL.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard let endpoint = URL(string: trimmedBaseURL + "/api/upload"), endpoint.scheme?.lowercased() == "https" else {
+            throw WorkspacePiInstallerError.invalidServerURL
+        }
+        guard !token.isEmpty else { throw WorkspacePiInstallerError.missingToken }
+
+        var request = URLRequest(url: endpoint)
+        request.httpMethod = "PUT"
+        request.timeoutInterval = 180
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue(ipaURL.lastPathComponent.asciiHeaderValue, forHTTPHeaderField: "X-Workspace-File-Name")
+        request.setValue(appInfo.bundleIdentifier.asciiHeaderValue, forHTTPHeaderField: "X-Workspace-Bundle-ID")
+        request.setValue(appInfo.version.asciiHeaderValue, forHTTPHeaderField: "X-Workspace-Version")
+        request.setValue(appInfo.displayName.asciiHeaderValue, forHTTPHeaderField: "X-Workspace-Display-Name")
+
+        let (data, response) = try await URLSession.shared.upload(for: request, fromFile: ipaURL)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw WorkspacePiInstallerError.invalidResponse
+        }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            let serverMessage = String(data: data, encoding: .utf8) ?? "HTTP \(httpResponse.statusCode)"
+            throw WorkspacePiInstallerError.serverRejected(serverMessage)
+        }
+        do {
+            return try JSONDecoder().decode(WorkspacePiInstallResult.self, from: data)
+        } catch {
+            throw WorkspacePiInstallerError.invalidResponse
+        }
+    }
+}
+
+private enum WorkspacePiInstallerError: LocalizedError {
+    case invalidServerURL
+    case missingToken
+    case invalidResponse
+    case serverRejected(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidServerURL:
+            return "Enter an HTTPS Workspace Pi server URL."
+        case .missingToken:
+            return "Enter the Workspace Pi upload token."
+        case .invalidResponse:
+            return "The Workspace Pi server returned an invalid response."
+        case .serverRejected(let message):
+            return "Workspace Pi rejected the upload: \(message)"
+        }
+    }
+}
+
+private extension String {
+    var asciiHeaderValue: String {
+        unicodeScalars.map { scalar in
+            scalar.isASCII && scalar.value >= 0x20 && scalar.value <= 0x7E ? String(scalar) : "?"
+        }.joined()
     }
 }
 
