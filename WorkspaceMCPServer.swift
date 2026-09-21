@@ -134,7 +134,7 @@ final class WorkspaceMCPServer: ObservableObject {
             return httpResponse(body: json([
                 "name": "Workspace MCP Bridge",
                 "status": "ok",
-                "tools": ["list_files", "read_file", "copy_file", "move_file", "delete_file", "make_directory", "guest_session", "guest_logs", "guest_eval"]
+                "tools": ["list_files", "read_file", "copy_file", "move_file", "delete_file", "make_directory", "guest_session", "guest_state", "guest_screenshot", "guest_tap", "guest_swipe", "guest_type", "guest_key", "guest_logs", "guest_eval"]
             ]))
         }
 
@@ -180,6 +180,7 @@ final class WorkspaceMCPServer: ObservableObject {
         }
 
         if path == "/guest/pending" && method == "GET" {
+            WorkspaceGuestSessionStore.shared.setBridgeConnected(true)
             let pending = WorkspaceGuestSessionStore.shared.evaluations
                 .filter { $0.result == nil && $0.error == nil }
                 .map { ["id": $0.id.uuidString, "code": $0.code] }
@@ -203,7 +204,55 @@ final class WorkspaceMCPServer: ObservableObject {
            let bodyData = bodyText.data(using: .utf8),
            let payload = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any],
            let message = payload["message"] as? String {
+            if message == "Workspace Frida bridge connected" {
+                WorkspaceGuestSessionStore.shared.setBridgeConnected(true)
+            }
             WorkspaceGuestSessionStore.shared.appendLog(message, level: payload["level"] as? String ?? "info")
+            return httpResponse(body: json(["ok": true]))
+        }
+
+        // CUA-style guest control endpoints. All are bearer-token protected
+        // above and use the same snapshot-scoped validation as /call.
+        if path == "/guest/state" && method == "POST",
+           let bodyData = bodyText.data(using: .utf8),
+           let arguments = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any] {
+            let result = WorkspaceGuestControlCenter.shared.state(arguments: arguments)
+            return httpResponse(status: result.status, body: json(result.body))
+        }
+
+        if path == "/guest/screenshot" && method == "POST",
+           let bodyData = bodyText.data(using: .utf8),
+           let arguments = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any] {
+            let result = WorkspaceGuestControlCenter.shared.screenshot(arguments: arguments)
+            return httpResponse(status: result.status, body: json(result.body))
+        }
+
+        if path.hasPrefix("/guest/control/") && method == "POST",
+           let bodyData = bodyText.data(using: .utf8),
+           let arguments = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any] {
+            let name = String(path.dropFirst("/guest/control/".count))
+            let tool = "guest_\(name)"
+            if ["guest_tap", "guest_swipe", "guest_type", "guest_key"].contains(tool) {
+                let result = WorkspaceGuestControlCenter.shared.action(tool: tool, arguments: arguments)
+                return httpResponse(status: result.status, body: json(result.body))
+            }
+        }
+
+        if path == "/guest/control/pending" && method == "GET" {
+            WorkspaceGuestSessionStore.shared.setBridgeConnected(true)
+            return httpResponse(body: json(["commands": WorkspaceGuestSessionStore.shared.pendingControlCommands()]))
+        }
+
+        if path == "/guest/control/result" && method == "POST",
+           let bodyData = bodyText.data(using: .utf8),
+           let payload = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any],
+           let rawID = payload["id"] as? String,
+           let id = UUID(uuidString: rawID) {
+            WorkspaceGuestSessionStore.shared.completeControlCommand(
+                id: id,
+                result: payload["result"] as? String,
+                error: payload["error"] as? String
+            )
             return httpResponse(body: json(["ok": true]))
         }
 
@@ -217,6 +266,12 @@ final class WorkspaceMCPServer: ObservableObject {
                     ["name": "delete_file", "arguments": ["path"]],
                     ["name": "make_directory", "arguments": ["path"]],
                     ["name": "guest_session", "arguments": []],
+                    ["name": "guest_state", "arguments": ["snapshot_id", "include_screenshot", "include_tree"]],
+                    ["name": "guest_screenshot", "arguments": ["snapshot_id"]],
+                    ["name": "guest_tap", "arguments": ["snapshot_id", "element_token", "x", "y"]],
+                    ["name": "guest_swipe", "arguments": ["snapshot_id", "from", "to", "duration_ms"]],
+                    ["name": "guest_type", "arguments": ["snapshot_id", "element_token", "text"]],
+                    ["name": "guest_key", "arguments": ["snapshot_id", "key"]],
                     ["name": "guest_logs", "arguments": []],
                     ["name": "guest_eval", "arguments": ["code"]]
                 ]
@@ -239,6 +294,12 @@ final class WorkspaceMCPServer: ObservableObject {
             switch tool {
             case "guest_session":
                 return httpResponse(body: json(WorkspaceGuestSessionStore.shared.snapshot()))
+
+            case "guest_state":
+                return guestControlResponse(tool: tool, arguments: arguments)
+
+            case "guest_screenshot", "guest_tap", "guest_swipe", "guest_type", "guest_key":
+                return guestControlResponse(tool: tool, arguments: arguments)
 
             case "guest_logs":
                 let session = WorkspaceGuestSessionStore.shared

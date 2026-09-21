@@ -669,15 +669,30 @@ struct WorkspaceGuestEvaluation: Identifiable, Codable, Hashable {
     var error: String?
 }
 
+/// A command that a guest-side Gadget can consume from the authenticated MCP
+/// bridge. The host never synthesizes private UIKit touch events for a guest
+/// process; commands are scoped to the snapshot that produced their token.
+struct WorkspaceGuestControlCommand: Identifiable, Codable, Hashable {
+    let id: UUID
+    let createdAt: Date
+    let kind: String
+    let snapshotID: String
+    let elementToken: String?
+    let payload: String
+}
+
 @MainActor
 final class WorkspaceGuestSessionStore: ObservableObject {
     static let shared = WorkspaceGuestSessionStore()
 
     @Published private(set) var appName: String?
     @Published private(set) var bundleIdentifier: String?
+    @Published private(set) var sessionID = UUID().uuidString.lowercased()
     @Published private(set) var isActive = false
+    @Published private(set) var isBridgeConnected = false
     @Published private(set) var logs: [WorkspaceGuestLogEntry] = []
     @Published private(set) var evaluations: [WorkspaceGuestEvaluation] = []
+    @Published private(set) var controlCommands: [WorkspaceGuestControlCommand] = []
 
     private init() {}
 
@@ -687,15 +702,20 @@ final class WorkspaceGuestSessionStore: ObservableObject {
         }
         self.appName = appName
         self.bundleIdentifier = bundleIdentifier
+        self.sessionID = UUID().uuidString.lowercased()
         isActive = true
         logs = []
         evaluations = []
+        controlCommands = []
+        isBridgeConnected = false
         appendLog("Started guest session for \(appName).", level: "system")
     }
 
     func stop(reason: String? = nil) {
         if let reason, !reason.isEmpty { appendLog(reason, level: "error") }
         isActive = false
+        controlCommands = []
+        isBridgeConnected = false
     }
 
     func appendLog(_ message: String, level: String = "info") {
@@ -703,6 +723,12 @@ final class WorkspaceGuestSessionStore: ObservableObject {
         guard !cleaned.isEmpty else { return }
         logs.append(WorkspaceGuestLogEntry(id: UUID(), date: .now, level: level, message: cleaned))
         if logs.count > 500 { logs.removeFirst(logs.count - 500) }
+    }
+
+    func setBridgeConnected(_ connected: Bool) {
+        guard isBridgeConnected != connected else { return }
+        isBridgeConnected = connected
+        appendLog(connected ? "Guest Frida bridge connected." : "Guest Frida bridge disconnected.", level: "system")
     }
 
     @discardableResult
@@ -721,15 +747,263 @@ final class WorkspaceGuestSessionStore: ObservableObject {
         else if let result { appendLog(result, level: "result") }
     }
 
+    @discardableResult
+    func submitControlCommand(kind: String, snapshotID: String, elementToken: String?, payload: [String: Any]) -> UUID {
+        let command = WorkspaceGuestControlCommand(
+            id: UUID(),
+            createdAt: .now,
+            kind: kind,
+            snapshotID: snapshotID,
+            elementToken: elementToken,
+            payload: (try? JSONSerialization.data(withJSONObject: payload)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+        )
+        controlCommands.append(command)
+        if controlCommands.count > 100 { controlCommands.removeFirst(controlCommands.count - 100) }
+        appendLog("Queued guest \(kind) command \(command.id.uuidString.prefix(8)).", level: "control")
+        return command.id
+    }
+
+    func pendingControlCommands() -> [[String: Any]] {
+        controlCommands.map { command in
+            var value: [String: Any] = [
+                "id": command.id.uuidString,
+                "createdAt": command.createdAt.ISO8601Format(),
+                "kind": command.kind,
+                "snapshotID": command.snapshotID,
+                "payload": command.payload
+            ]
+            if let elementToken = command.elementToken { value["elementToken"] = elementToken }
+            return value
+        }
+    }
+
+    func completeControlCommand(id: UUID, result: String? = nil, error: String? = nil) {
+        controlCommands.removeAll { $0.id == id }
+        if let error { appendLog("Guest control failed: \(error)", level: "error") }
+        else if let result { appendLog(result, level: "control") }
+    }
+
     func snapshot() -> [String: Any] {
         [
             "active": isActive,
             "app": appName ?? "",
             "bundleIdentifier": bundleIdentifier ?? "",
+            "sessionID": sessionID,
+            "bridgeConnected": isBridgeConnected,
             "logCount": logs.count,
-            "pendingEvaluations": evaluations.filter { $0.result == nil && $0.error == nil }.count
+            "pendingEvaluations": evaluations.filter { $0.result == nil && $0.error == nil }.count,
+            "pendingControlCommands": controlCommands.count
         ]
     }
+}
+
+// MARK: - CUA-style guest state and control
+
+private struct WorkspaceGuestControlSnapshot {
+    let id: String
+    let sessionID: String
+    let sessionApp: String
+    let rootView: UIView
+    var elements: [String: UIView]
+}
+
+@MainActor
+final class WorkspaceGuestControlCenter {
+    static let shared = WorkspaceGuestControlCenter()
+    private var snapshots: [String: WorkspaceGuestControlSnapshot] = [:]
+    private let maxElements = 350
+    private let maxScreenshotDimension: CGFloat = 2_048
+    private let maxScreenshotBytes = 6 * 1_024 * 1_024
+    private weak var registeredGuestView: UIView?
+
+    private init() {}
+
+    func registerGuestView(_ view: UIView, bundleIdentifier: String) {
+        registeredGuestView = view
+    }
+
+    func unregisterGuestView(_ view: UIView) {
+        guard registeredGuestView === view else { return }
+        registeredGuestView = nil
+        snapshots.removeAll()
+    }
+
+    func state(arguments: [String: Any]) -> (status: String, body: [String: Any]) {
+        guard WorkspaceGuestSessionStore.shared.isActive else {
+            return ("409 Conflict", refusal("no_active_guest", "No LiveContainer guest is active."))
+        }
+        let includeScreenshot = arguments["include_screenshot"] as? Bool ?? true
+        let includeTree = arguments["include_tree"] as? Bool ?? true
+        guard let view = activeGuestView() else {
+            return ("501 Not Implemented", refusal("native_runtime_unavailable", "The native LiveContainer guest view is unavailable in this build."))
+        }
+        let id = UUID().uuidString.lowercased()
+        var snapshot = WorkspaceGuestControlSnapshot(id: id, sessionID: WorkspaceGuestSessionStore.shared.sessionID, sessionApp: WorkspaceGuestSessionStore.shared.appName ?? "", rootView: view, elements: [:])
+        let viewport = ["width": view.bounds.width, "height": view.bounds.height, "scale": UIScreen.main.scale] as [String: Any]
+        var body: [String: Any] = [
+            "snapshot_id": id,
+            "session_id": snapshot.sessionID,
+            "app": snapshot.sessionApp,
+            "bundleIdentifier": WorkspaceGuestSessionStore.shared.bundleIdentifier ?? "",
+            "viewport": viewport,
+            "screenshot_width": view.bounds.width,
+            "screenshot_height": view.bounds.height,
+            "screenshot_scale": UIScreen.main.scale,
+            "screenshot_mime": "image/png",
+            "degraded": !WorkspaceGuestSessionStore.shared.isBridgeConnected,
+            "capabilities": [
+                "screenshot": true,
+                "semantic_tree": false,
+                "guest_bridge_commands": WorkspaceGuestSessionStore.shared.isBridgeConnected
+            ]
+        ]
+        if !WorkspaceGuestSessionStore.shared.isBridgeConnected {
+            body["degraded_reason"] = "guest_bridge_not_connected"
+        }
+        // Host-side views render the guest surface but do not reliably expose
+        // its accessibility hierarchy. The Frida bridge is the source of truth
+        // for guest semantics; this limited tree only describes host controls.
+        if includeTree { body["elements"] = hostElements(for: view, snapshot: &snapshot) }
+        if includeScreenshot {
+            guard let image = imageData(for: view) else {
+                return ("503 Service Unavailable", refusal("screenshot_unavailable", "The active guest surface could not be rendered."))
+            }
+            body["screenshot_base64"] = image.base64EncodedString()
+            body["screenshot_bytes"] = image.count
+        }
+        snapshots = [id: snapshot] // A new state invalidates all previous element tokens.
+        return ("200 OK", body)
+    }
+
+    func screenshot(arguments: [String: Any]) -> (status: String, body: [String: Any]) {
+        guard let snapshot = validatedSnapshot(arguments), let data = imageData(for: snapshot.rootView) else {
+            return ("409 Conflict", refusal("stale_or_unavailable_snapshot", "Capture guest_state first and use its snapshot_id."))
+        }
+        return ("200 OK", ["snapshot_id": snapshot.id, "app": snapshot.sessionApp, "image_base64": data.base64EncodedString(), "format": "png", "bytes": data.count])
+    }
+
+    func action(tool: String, arguments: [String: Any]) -> (status: String, body: [String: Any]) {
+        guard let snapshot = validatedSnapshot(arguments) else {
+            return ("409 Conflict", refusal("stale_snapshot", "The snapshot is stale. Capture guest_state again."))
+        }
+        guard WorkspaceGuestSessionStore.shared.isBridgeConnected else {
+            return ("501 Not Implemented", refusal("capability_unavailable", "The guest has not connected its Frida control bridge."))
+        }
+        let elementToken = arguments["element_token"] as? String
+        if let elementToken, snapshot.elements[elementToken] == nil {
+            return ("409 Conflict", refusal("stale_element_token", "The element token is not part of this snapshot."))
+        }
+        switch tool {
+        case "guest_tap":
+            guard elementToken == nil || element != nil else { return ("409 Conflict", refusal("unknown_element", "The element token is not in this snapshot.")) }
+            guard elementToken != nil || validPixelPoint(arguments, in: snapshot.rootView) else {
+                return ("400 Bad Request", refusal("invalid_coordinate_space", "Provide a snapshot element token or pixel x and y within the returned viewport."))
+            }
+            let payload = ["x": arguments["x"] ?? NSNull(), "y": arguments["y"] ?? NSNull()]
+            let id = WorkspaceGuestSessionStore.shared.submitControlCommand(kind: "tap", snapshotID: snapshot.id, elementToken: elementToken, payload: payload)
+            return ("202 Accepted", queued(id, snapshot.id, "tap"))
+        case "guest_swipe":
+            guard let from = point(arguments["from"]), let to = point(arguments["to"]) else { return ("400 Bad Request", refusal("invalid_coordinates", "from and to must be [x, y] arrays.")) }
+            guard [from.0, from.1, to.0, to.1].allSatisfy({ $0 >= 0 && $0 <= 1 }) else { return ("400 Bad Request", refusal("invalid_coordinates", "Coordinates must be normalized between 0 and 1.")) }
+            let payload: [String: Any] = ["from": [from.0, from.1], "to": [to.0, to.1], "duration_ms": arguments["duration_ms"] ?? 350]
+            let id = WorkspaceGuestSessionStore.shared.submitControlCommand(kind: "swipe", snapshotID: snapshot.id, elementToken: elementToken, payload: payload)
+            return ("202 Accepted", queued(id, snapshot.id, "swipe"))
+        case "guest_type":
+            guard let text = arguments["text"] as? String else { return ("400 Bad Request", refusal("missing_text", "text is required.")) }
+            let id = WorkspaceGuestSessionStore.shared.submitControlCommand(kind: "type", snapshotID: snapshot.id, elementToken: elementToken, payload: ["text": text])
+            return ("202 Accepted", queued(id, snapshot.id, "type"))
+        case "guest_key":
+            guard let key = arguments["key"] as? String, !key.isEmpty else { return ("400 Bad Request", refusal("missing_key", "key is required.")) }
+            let id = WorkspaceGuestSessionStore.shared.submitControlCommand(kind: "key", snapshotID: snapshot.id, elementToken: elementToken, payload: ["key": key])
+            return ("202 Accepted", queued(id, snapshot.id, "key"))
+        default:
+            return ("400 Bad Request", refusal("unknown_control", "Unsupported guest control tool."))
+        }
+    }
+
+    private func activeGuestView() -> UIView? {
+        if let registeredGuestView { return registeredGuestView }
+#if LIVE_CONTAINER_NATIVE
+        let name = WorkspaceGuestSessionStore.shared.appName
+        return MultitaskDockManager.shared.apps.first(where: { app in
+            guard let name else { return true }
+            return app.appName == name
+        })?.view
+#else
+        return nil
+#endif
+    }
+
+    private func validatedSnapshot(_ arguments: [String: Any]) -> WorkspaceGuestControlSnapshot? {
+        guard WorkspaceGuestSessionStore.shared.isActive,
+              let id = arguments["snapshot_id"] as? String,
+              let snapshot = snapshots[id], snapshot.sessionID == WorkspaceGuestSessionStore.shared.sessionID,
+              snapshot.sessionApp == (WorkspaceGuestSessionStore.shared.appName ?? "") else { return nil }
+        return snapshot
+    }
+
+    private func hostElements(for view: UIView, snapshot: inout WorkspaceGuestControlSnapshot) -> [[String: Any]] {
+        func walk(_ node: UIView, path: String) -> [String: Any] {
+            guard snapshot.elements.count < maxElements else { return ["truncated": true] }
+            let token = "\(snapshot.id).\(path)"
+            snapshot.elements[token] = node
+            let frame = node.convert(node.bounds, to: view)
+            var value: [String: Any] = [
+                "element_token": token,
+                "type": String(describing: type(of: node)),
+                "frame": ["x": frame.minX, "y": frame.minY, "width": frame.width, "height": frame.height],
+                "visible": !node.isHidden && node.alpha > 0.01,
+                "enabled": (node as? UIControl)?.isEnabled ?? true
+            ]
+            if let label = node.accessibilityLabel, !label.isEmpty { value["label"] = label }
+            if let identifier = node.accessibilityIdentifier, !identifier.isEmpty { value["identifier"] = identifier }
+            if let button = node as? UIButton, let title = button.currentTitle, !title.isEmpty { value["title"] = title }
+            let children = node.subviews.enumerated().prefix(maxElements - snapshot.elements.count).map { walk($0.element, path: "\(path).\($0.offset)") }
+            if !children.isEmpty { value["children"] = children }
+            return value
+        }
+        return [walk(view, path: "0")]
+    }
+
+    private func imageData(for view: UIView) -> Data? {
+        guard view.bounds.width > 0, view.bounds.height > 0 else { return nil }
+        let format = UIGraphicsImageRendererFormat()
+        let ratio = min(1, maxScreenshotDimension / max(view.bounds.width, view.bounds.height))
+        format.scale = max(1, UIScreen.main.scale * ratio)
+        format.opaque = true
+        let image = UIGraphicsImageRenderer(bounds: view.bounds, format: format).image { _ in
+            view.drawHierarchy(in: view.bounds, afterScreenUpdates: true)
+        }
+        guard let data = image.pngData(), data.count <= maxScreenshotBytes else { return nil }
+        return data
+    }
+
+    private func point(_ value: Any?) -> (Double, Double)? {
+        if let values = value as? [Double], values.count >= 2 { return (values[0], values[1]) }
+        if let values = value as? [Any], values.count >= 2, let x = values[0] as? NSNumber, let y = values[1] as? NSNumber { return (x.doubleValue, y.doubleValue) }
+        return nil
+    }
+
+    private func validPixelPoint(_ arguments: [String: Any], in view: UIView) -> Bool {
+        guard let x = (arguments["x"] as? NSNumber)?.doubleValue,
+              let y = (arguments["y"] as? NSNumber)?.doubleValue else { return false }
+        return x >= 0 && y >= 0 && x <= view.bounds.width && y <= view.bounds.height
+    }
+
+    private func refusal(_ code: String, _ message: String) -> [String: Any] { ["effect": "refused", "route": "host", "refusal_code": code, "message": message, "evidence": NSNull()] }
+    private func queued(_ id: UUID, _ snapshotID: String, _ kind: String) -> [String: Any] { ["effect": "partial", "route": "frida_gadget", "command_id": id.uuidString, "snapshot_id": snapshotID, "kind": kind, "evidence": ["pending": true], "escalation": "Wait for /guest/control/result, then capture guest_state to verify the visible result." ] }
+}
+
+@MainActor
+func guestControlResponse(tool: String, arguments: [String: Any]) -> Data {
+    let result: (status: String, body: [String: Any])
+    if tool == "guest_state" { result = WorkspaceGuestControlCenter.shared.state(arguments: arguments) }
+    else if tool == "guest_screenshot" { result = WorkspaceGuestControlCenter.shared.screenshot(arguments: arguments) }
+    else { result = WorkspaceGuestControlCenter.shared.action(tool: tool, arguments: arguments) }
+    let body = (try? JSONSerialization.data(withJSONObject: result.body, options: [.sortedKeys])) ?? Data("{\"error\":\"Encoding failure\"}".utf8)
+    var response = Data("HTTP/1.1 \(result.status)\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n".utf8)
+    response.append(body)
+    return response
 }
 
 @MainActor

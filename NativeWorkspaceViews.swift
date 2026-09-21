@@ -98,7 +98,10 @@ final class NativeWorkspaceHomeLauncher: NSObject, ObservableObject, LCAppModelD
         )
         Task {
             do {
-                try await app.runApp()
+                // Keep the guest in LiveContainer's virtual window so the
+                // Workspace MCP bridge can capture its hosted surface and
+                // the split terminal can remain visible alongside it.
+                try await app.runApp(multitask: true)
                 try? await Task.sleep(nanoseconds: 350_000_000)
                 WorkspaceGuestSplitOverlayController.shared.show(
                     appName: app.displayName,

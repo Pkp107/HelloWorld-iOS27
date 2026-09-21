@@ -33,6 +33,13 @@ cp "${ROOT_DIR}/WorkspaceShareExtension.swift" "${BUILD_ROOT}/ShareExtension/Wor
 cp "${ROOT_DIR}/WorkspaceHomeScreenSigner.mm" "${BUILD_ROOT}/ZSign/WorkspaceHomeScreenSigner.mm"
 cp "${ROOT_DIR}/WorkspaceLCSigningBridge.m" "${BUILD_ROOT}/LiveContainerSwiftUI/Utilities/WorkspaceLCSigningBridge.m"
 
+# Retain the actual LiveContainer guest surface for the authenticated MCP
+# bridge. The view is registered only while its scene is alive; control still
+# requires the opted-in Frida Gadget inside that guest process.
+MULTITASK_WINDOW="${BUILD_ROOT}/MultitaskSupport/MultitaskAppWindow.swift"
+perl -0pi -e 's/func appSceneVCAppDidExit\(_: AppSceneViewController!\) \{\r?\n\s*onExit\(\)\r?\n\s*\}/func appSceneVCAppDidExit(_ vc: AppSceneViewController!) {\n            Task { @MainActor in\n                WorkspaceGuestControlCenter.shared.unregisterGuestView(vc.contentView)\n            }\n            onExit()\n        }/g' "${MULTITASK_WINDOW}"
+perl -0pi -e 's/(func appSceneVC\(_ vc: AppSceneViewController!, didInitializeWithError error: \(any Error\)!\) \{)/$1\n            Task { @MainActor in\n                WorkspaceGuestControlCenter.shared.registerGuestView(vc.contentView, bundleIdentifier: vc.bundleId ?? "")\n            }/g' "${MULTITASK_WINDOW}"
+
 # LCUtils dynamically loads ZSign and PKZipArchiver, avoiding a static link
 # from the Workspace SwiftUI framework.
 perl -0pi -e 's|(\@interface LCUtils : NSObject)|$1\n+ (void)workspaceSignAppAtPath:(NSString *)appPath bundleIdentifier:(NSString *)bundleIdentifier certificate:(NSData *)certificate password:(NSString *)password completionHandler:(void (^)(BOOL success, NSError *error))completionHandler;\n+ (void)workspaceSignHomeScreenAppAtPath:(NSString *)appPath bundleIdentifier:(NSString *)bundleIdentifier certificate:(NSData *)certificate provisioningProfile:(NSData *)provisioningProfile password:(NSString *)password completionHandler:(void (^)(BOOL success, NSError *error))completionHandler;\n+ (NSData *)workspaceZipDirectoryAtURL:(NSURL *)url;\n|' "${BUILD_ROOT}/LiveContainerSwiftUI/Utilities/LCUtils.h"
