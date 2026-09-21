@@ -4,3 +4,4 @@ build/
 xcuserdata/
 artifacts/
 .build/
+.workspace_pi_token
