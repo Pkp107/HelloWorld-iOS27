@@ -9,6 +9,10 @@
                                 completionHandler:(void (^)(BOOL success, NSError *error))completionHandler;
 @end
 
+@interface LCUtils (WorkspacePrivate)
++ (void)loadStoreFrameworksWithError2:(NSError **)error;
+@end
+
 @implementation LCUtils (WorkspaceHomeScreenSigning)
 
 + (void)workspaceSignHomeScreenAppAtPath:(NSString *)appPath

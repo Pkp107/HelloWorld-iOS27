@@ -4,8 +4,6 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 UPSTREAM_REPOSITORY="https://github.com/LiveContainer/LiveContainer.git"
 UPSTREAM_REVISION="4dbe0f9"
-FULL_ZSIGN_REPOSITORY="https://github.com/khcrysalis/Zsign-Package.git"
-FULL_ZSIGN_REVISION="6ffe703df73ef9069adacdbb19d571f11a69a801"
 BUILD_ROOT="${RUNNER_TEMP:-${ROOT_DIR}/.build}/WorkspaceLiveContainer"
 
 rm -rf "${BUILD_ROOT}"
@@ -36,13 +34,9 @@ cp "${ROOT_DIR}/WorkspaceLCSigningBridge.m" "${BUILD_ROOT}/LiveContainerSwiftUI/
 perl -0pi -e 's|(\@interface LCUtils : NSObject)|$1\n+ (void)workspaceSignAppAtPath:(NSString *)appPath bundleIdentifier:(NSString *)bundleIdentifier certificate:(NSData *)certificate password:(NSString *)password completionHandler:(void (^)(BOOL success, NSError *error))completionHandler;\n+ (void)workspaceSignHomeScreenAppAtPath:(NSString *)appPath bundleIdentifier:(NSString *)bundleIdentifier certificate:(NSData *)certificate provisioningProfile:(NSData *)provisioningProfile password:(NSString *)password completionHandler:(void (^)(BOOL success, NSError *error))completionHandler;\n+ (NSData *)workspaceZipDirectoryAtURL:(NSURL *)url;\n|' "${BUILD_ROOT}/LiveContainerSwiftUI/Utilities/LCUtils.h"
 perl -0pi -e 's|\n\@end\s*\z|\n+ (void)workspaceSignAppAtPath:(NSString *)appPath bundleIdentifier:(NSString *)bundleIdentifier certificate:(NSData *)certificate password:(NSString *)password completionHandler:(void (^)(BOOL success, NSError *error))completionHandler {\n    NSError *error = nil;\n    [self loadStoreFrameworksWithError2:\&error];\n    if (error) { completionHandler(NO, error); return; }\n    NSProgress *progress = [NSClassFromString(\@"ZSigner\") signWithAppPath:appPath bundleId:bundleIdentifier cert:certificate pass:password completionHandler:completionHandler];\n    if (!progress) { completionHandler(NO, [NSError errorWithDomain:NSBundle.mainBundle.bundleIdentifier code:2 userInfo:nil]); }\n}\n\n+ (NSData *)workspaceZipDirectoryAtURL:(NSURL *)url {\n    return [[NSClassFromString(\@"PKZipArchiver\") new] zippedDataForURL:url];\n}\n\n\@end\n|' "${BUILD_ROOT}/LiveContainerSwiftUI/Utilities/LCUtils.m"
 
-# Home Screen IPAs need profile-derived entitlements, nested-bundle signing,
-# regenerated CodeResources, and a CMS signature. The JIT-only upstream entry
-# point does none of those. This pinned MIT ZSign implementation supplies the
-# standard bundle engine while retaining LiveContainer's runtime host.
-git clone --depth 1 "${FULL_ZSIGN_REPOSITORY}" "${BUILD_ROOT}/WorkspaceZsign" >&2
-git -C "${BUILD_ROOT}/WorkspaceZsign" fetch --depth 1 origin "${FULL_ZSIGN_REVISION}" >&2
-git -C "${BUILD_ROOT}/WorkspaceZsign" checkout --detach "${FULL_ZSIGN_REVISION}" >&2
+# Home Screen IPAs need profile-derived entitlements and a CMS signature. The
+# JIT-only upstream entry point does not consume the selected profile, so the
+# Workspace adapter uses the same ZSign Mach-O engine with full profile data.
 
 # Let the native LiveContainer share service hand supported signing assets to
 # the Workspace app-group inbox before the main app consumes them.

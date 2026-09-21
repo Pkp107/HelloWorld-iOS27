@@ -1,22 +1,6 @@
 #import "zsigner.h"
+#include "macho.h"
 #include "openssl.h"
-
-// Keep this adapter independent of the bundle header's Xcode file-system
-// synchronization rules. The implementation is provided by bundle.cpp.
-class ZBundle {
-public:
-    std::string signFailedFiles;
-    bool SignFolder(ZSignAsset *asset,
-                    const std::string &folder,
-                    const std::string &bundleId,
-                    const std::string &version,
-                    const std::string &displayName,
-                    const std::vector<std::string> &dylibs,
-                    bool force,
-                    bool weakInject,
-                    bool enableCache,
-                    bool excludeProvisioning);
-};
 
 @implementation ZSigner (WorkspaceHomeScreenSigning)
 
@@ -48,19 +32,35 @@ public:
             false
         );
 
-        ZBundle bundle;
-        BOOL signedApp = initialized && bundle.SignFolder(
-            &signingAsset,
-            string(appPath.UTF8String),
-            string(bundleId.UTF8String),
-            "",
-            "",
-            vector<string>(),
-            true,
-            false,
-            false,
-            true
-        );
+        NSMutableArray<NSURL *> *machOURLs = [NSMutableArray array];
+        NSDirectoryEnumerator *enumerator = [[NSFileManager defaultManager]
+            enumeratorAtURL:[NSURL fileURLWithPath:appPath]
+            includingPropertiesForKeys:@[NSURLIsRegularFileKey]
+            options:NSDirectoryEnumerationSkipsHiddenFiles
+            errorHandler:nil];
+        BOOL signedApp = initialized;
+        if (initialized) {
+            for (NSURL *fileURL in enumerator) {
+                NSNumber *isRegular = nil;
+                if (![fileURL getResourceValue:&isRegular forKey:NSURLIsRegularFileKey error:nil] || !isRegular.boolValue) { continue; }
+                [machOURLs addObject:fileURL];
+            }
+            [machOURLs sortUsingComparator:^NSComparisonResult(NSURL *a, NSURL *b) {
+                if (a.path.length == b.path.length) { return [a.path compare:b.path]; }
+                return a.path.length > b.path.length ? NSOrderedAscending : NSOrderedDescending;
+            }];
+            for (NSURL *fileURL in machOURLs) {
+                ZMachO macho;
+                if (!macho.Init(fileURL.path.UTF8String)) {
+                    continue;
+                }
+                if (!macho.Sign(&signingAsset, true, string(bundleId.UTF8String), "", "", "")) {
+                    signedApp = NO;
+                    continue;
+                }
+                refreshFile(fileURL.path);
+            }
+        }
 
         [[NSFileManager defaultManager] removeItemAtPath:certificatePath error:nil];
         [[NSFileManager defaultManager] removeItemAtPath:profilePath error:nil];
@@ -73,9 +73,7 @@ public:
             }
 
             NSString *message = writeError.localizedDescription;
-            if (message.length == 0 && initialized) {
-                message = [NSString stringWithUTF8String:bundle.signFailedFiles.c_str()];
-            }
+            if (message.length == 0 && initialized) { message = @"One or more nested Mach-O files could not be signed."; }
             if (message.length == 0) {
                 message = @"The certificate does not match this provisioning profile or its password is incorrect.";
             }
