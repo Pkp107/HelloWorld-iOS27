@@ -252,6 +252,7 @@ struct NativeIPASignerView: View {
     @State private var showingProfileImporter = false
     @State private var showingInstallHandoff = false
     @State private var certificatePassword = ""
+    @StateObject private var localServer = LocalInstallServer()
 
     var body: some View {
         NavigationStack {
@@ -334,6 +335,24 @@ struct NativeIPASignerView: View {
                         } label: {
                             Label("Install on device Home Screen", systemImage: "iphone.and.arrow.forward")
                         }
+                        Button {
+                            startLocalInstallServer(for: signedIPAURL, info: signer.signedAppInfo)
+                        } label: {
+                            Label(localServer.isRunning ? "Refresh phone installer" : "Start phone installer", systemImage: "network")
+                        }
+                        if let installURL = localServer.installURL {
+                            Button {
+                                openLocalInstallPage(installURL)
+                            } label: {
+                                Label("Open local installer", systemImage: "arrow.up.forward.app")
+                            }
+                            ShareLink(item: installURL) {
+                                Label("Share local install link", systemImage: "link")
+                            }
+                            Text(localServer.statusMessage ?? installURL.absoluteString)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                     if let statusMessage = signer.statusMessage, !signer.isSigning {
                         Text(statusMessage)
@@ -344,6 +363,7 @@ struct NativeIPASignerView: View {
             }
             .navigationTitle("Signing")
         }
+        .onDisappear { localServer.stop() }
         .onAppear {
             if certificatePassword.isEmpty {
                 certificatePassword = WorkspaceCertificatePasswordStore.load()
@@ -385,6 +405,22 @@ struct NativeIPASignerView: View {
         .sheet(isPresented: $showingInstallHandoff) {
             if let signedIPAURL = signer.signedIPAURL {
                 WorkspaceInstallHandoffView(ipaURL: signedIPAURL)
+            }
+        }
+    }
+
+    private func startLocalInstallServer(for url: URL, info: SignedAppInstallInfo?) {
+        localServer.start(packageURL: url, appInfo: info ?? SignedAppInstallInfo(
+            bundleIdentifier: "com.pkp107.workspace.signed",
+            version: "1.0",
+            displayName: url.deletingPathExtension().lastPathComponent
+        ))
+    }
+
+    private func openLocalInstallPage(_ url: URL) {
+        UIApplication.shared.open(url) { accepted in
+            if !accepted {
+                localServer.statusMessage = "iOS could not open the local installer page. Try the external HTTPS or SideStore handoff."
             }
         }
     }
@@ -509,9 +545,11 @@ final class NativeIPASigningEngine: ObservableObject {
     @Published private(set) var isSigning = false
     @Published private(set) var statusMessage: String?
     @Published private(set) var signedIPAURL: URL?
+    @Published private(set) var signedAppInfo: SignedAppInstallInfo?
 
     func clearOutput() {
         signedIPAURL = nil
+        signedAppInfo = nil
         statusMessage = nil
     }
 
@@ -542,7 +580,8 @@ final class NativeIPASigningEngine: ObservableObject {
                     provisioningProfile: provisioningProfile,
                     certificatePassword: certificatePassword
                 )
-                signedIPAURL = output
+                signedIPAURL = output.url
+                signedAppInfo = output.info
                 statusMessage = "Signed IPA is ready to share."
             } catch {
                 statusMessage = "Signing failed: \(error.localizedDescription)"
@@ -556,7 +595,7 @@ final class NativeIPASigningEngine: ObservableObject {
         certificate: Data,
         provisioningProfile: Data,
         certificatePassword: String
-    ) async throws -> URL {
+    ) async throws -> (url: URL, info: SignedAppInstallInfo) {
         let fileManager = FileManager.default
         let workRoot = fileManager.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("WorkspaceSigner", isDirectory: true)
@@ -616,7 +655,11 @@ final class NativeIPASigningEngine: ObservableObject {
         let outputURL = outputDirectory.appendingPathComponent(fileName, isDirectory: false)
         try? fileManager.removeItem(at: outputURL)
         try archiveData.write(to: outputURL, options: [.atomic])
-        return outputURL
+        return (outputURL, SignedAppInstallInfo(
+            bundleIdentifier: bundleIdentifier,
+            version: info["CFBundleShortVersionString"] as? String ?? "1.0",
+            displayName: info["CFBundleDisplayName"] as? String ?? info["CFBundleName"] as? String ?? appURL.deletingPathExtension().lastPathComponent
+        ))
     }
 }
 

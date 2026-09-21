@@ -25,6 +25,7 @@ cp "${ROOT_DIR}/LiveContainerRuntime.swift" "${SHELL_ROOT}/LiveContainerRuntime.
 cp "${ROOT_DIR}/NativeWorkspaceViews.swift" "${SHELL_ROOT}/NativeWorkspaceViews.swift"
 cp "${ROOT_DIR}/NativeWorkspaceInstaller.swift" "${SHELL_ROOT}/NativeWorkspaceInstaller.swift"
 cp "${ROOT_DIR}/SigningAssetStore.swift" "${SHELL_ROOT}/SigningAssetStore.swift"
+cp "${ROOT_DIR}/LocalInstallServer.swift" "${SHELL_ROOT}/LocalInstallServer.swift"
 cp "${ROOT_DIR}/WorkspaceShareExtension.swift" "${BUILD_ROOT}/ShareExtension/WorkspaceShareExtension.swift"
 
 # Add a small adapter to the upstream bridge. LCUtils already loads ZSign and
@@ -44,6 +45,9 @@ cp "${ROOT_DIR}/NativeLCTabView.swift" "${BUILD_ROOT}/LiveContainerSwiftUI/Views
 
 /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName Workspace" "${BUILD_ROOT}/LiveContainer/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleName Workspace" "${BUILD_ROOT}/LiveContainer/Info.plist"
+/usr/libexec/PlistBuddy -c "Add :NSLocalNetworkUsageDescription string Workspace hosts signed IPA installers locally on this device." "${BUILD_ROOT}/LiveContainer/Info.plist" 2>/dev/null || true
+/usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" "${BUILD_ROOT}/LiveContainer/Info.plist" 2>/dev/null || true
+/usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsLocalNetworking bool true" "${BUILD_ROOT}/LiveContainer/Info.plist" 2>/dev/null || true
 # Give this host and all of its derived extensions an identity distinct from
 # an installed upstream LiveContainer. The extension identifiers remain
 # derived from the host identifier by the upstream xcconfig files.

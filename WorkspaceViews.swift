@@ -473,6 +473,7 @@ private struct InstallerInstallChoiceView: View {
     @State private var statusMessage: String?
 #if LIVE_CONTAINER_NATIVE
     @StateObject private var signer = NativeIPASigningEngine()
+    @StateObject private var localServer = LocalInstallServer()
 #endif
 
     var body: some View {
@@ -546,13 +547,18 @@ private struct InstallerInstallChoiceView: View {
                 isWorking = false
             }
 #endif
-            .sheet(isPresented: $showingInstallHandoff) {
+            .onDisappear {
                 #if LIVE_CONTAINER_NATIVE
+                localServer.stop()
+                #endif
+            }
+            #if LIVE_CONTAINER_NATIVE
+            .sheet(isPresented: $showingInstallHandoff) {
                 if let signedIPAURL = signer.signedIPAURL {
                     WorkspaceInstallHandoffView(ipaURL: signedIPAURL)
                 }
-                #endif
             }
+            #endif
         }
     }
 
@@ -587,6 +593,28 @@ private struct InstallerInstallChoiceView: View {
                     showingInstallHandoff = true
                 } label: {
                     Label("Install on device Home Screen", systemImage: "iphone.and.arrow.forward")
+                }
+                Button {
+                    localServer.start(
+                        packageURL: signedIPAURL,
+                        appInfo: signer.signedAppInfo ?? SignedAppInstallInfo(
+                            bundleIdentifier: app.bundleIdentifier,
+                            version: app.version,
+                            displayName: app.name
+                        )
+                    )
+                } label: {
+                    Label(localServer.isRunning ? "Refresh phone installer" : "Start phone installer", systemImage: "network")
+                }
+                if let installURL = localServer.installURL {
+                    Button {
+                        UIApplication.shared.open(installURL)
+                    } label: {
+                        Label("Open local installer", systemImage: "arrow.up.forward.app")
+                    }
+                    Text(localServer.statusMessage ?? installURL.absoluteString)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
             }
 #endif
