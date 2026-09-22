@@ -15,6 +15,7 @@ struct InstallerView: View {
 
 private enum InstallerSection: String, CaseIterable, Identifiable {
     case store
+    case modules
     case repositories
     case installed
 
@@ -23,6 +24,7 @@ private enum InstallerSection: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .store: return "Store"
+        case .modules: return "Modules"
         case .repositories: return "Repos"
         case .installed: return "Installed"
         }
@@ -31,6 +33,7 @@ private enum InstallerSection: String, CaseIterable, Identifiable {
     var symbol: String {
         switch self {
         case .store: return "bag.fill"
+        case .modules: return "shippingbox"
         case .repositories: return "globe"
         case .installed: return "shippingbox.fill"
         }
@@ -55,6 +58,10 @@ private struct AppStoreInstallerView: View {
             )
             .tabItem { Label(InstallerSection.store.title, systemImage: InstallerSection.store.symbol) }
             .tag(InstallerSection.store)
+
+            InstallerModulesView(store: store)
+                .tabItem { Label(InstallerSection.modules.title, systemImage: InstallerSection.modules.symbol) }
+                .tag(InstallerSection.modules)
 
             InstallerRepositoriesView(catalog: catalog)
                 .tabItem { Label(InstallerSection.repositories.title, systemImage: InstallerSection.repositories.symbol) }
@@ -713,7 +720,7 @@ struct WorkspaceFileManagerView: View {
     @State private var showingImporter = false
     @StateObject private var assetStore = SigningAssetStore()
 
-    private let folders = ["Incoming", "IPAs", "AI Models", "Certificates", "Provisioning Profiles", "Downloads", "Signed"]
+    private let folders = ["Incoming", "IPAs", "AI Models", "Modules", "Certificates", "Provisioning Profiles", "Downloads", "Signed"]
 
     var body: some View {
         NavigationStack {

@@ -489,7 +489,7 @@ final class WorkspaceStore: ObservableObject {
     }
 
     private var workspaceFileFolders: [String] {
-        ["Incoming", "IPAs", "AI Models", "Certificates", "Provisioning Profiles", "Downloads", "Signed"]
+        ["Incoming", "IPAs", "AI Models", "Modules", "Certificates", "Provisioning Profiles", "Downloads", "Signed"]
     }
 
     func workspaceFolderDirectory(named name: String) -> URL {

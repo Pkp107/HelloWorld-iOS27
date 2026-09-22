@@ -221,3 +221,54 @@ final class WorkspaceModuleStore: ObservableObject {
         UserDefaults.standard.set(data, forKey: defaultsKey)
     }
 }
+
+/// A downloaded module package is kept as an app-owned file.  iOS cannot load
+/// an arbitrary unsigned Mach-O/framework downloaded after installation, so
+/// this store records the package for data, scripts, model assets, and remote
+/// adapters without pretending that it changes the signed executable.
+struct WorkspaceInstalledModulePackage: Codable, Hashable, Identifiable {
+    let moduleID: WorkspaceModuleID
+    let version: String
+    let fileName: String
+    let sourceURL: URL
+    let installedAt: Date
+
+    var id: String { "\(moduleID.rawValue)@\(version)" }
+}
+
+@MainActor
+final class WorkspaceModulePackageStore: ObservableObject {
+    @Published private(set) var packages: [WorkspaceInstalledModulePackage]
+
+    private let defaultsKey = "workspace.installedModulePackages.v1"
+
+    init() {
+        if let data = UserDefaults.standard.data(forKey: defaultsKey),
+           let saved = try? JSONDecoder().decode([WorkspaceInstalledModulePackage].self, from: data) {
+            packages = saved
+        } else {
+            packages = []
+        }
+    }
+
+    func package(moduleID: WorkspaceModuleID, version: String) -> WorkspaceInstalledModulePackage? {
+        packages.first { $0.moduleID == moduleID && $0.version == version }
+    }
+
+    func install(_ package: WorkspaceInstalledModulePackage) {
+        packages.removeAll { $0.id == package.id }
+        packages.append(package)
+        packages.sort { $0.moduleID.title.localizedCaseInsensitiveCompare($1.moduleID.title) == .orderedAscending }
+        persist()
+    }
+
+    func remove(_ package: WorkspaceInstalledModulePackage) {
+        packages.removeAll { $0.id == package.id }
+        persist()
+    }
+
+    private func persist() {
+        guard let data = try? JSONEncoder().encode(packages) else { return }
+        UserDefaults.standard.set(data, forKey: defaultsKey)
+    }
+}
