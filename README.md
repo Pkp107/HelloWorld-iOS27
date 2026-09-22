@@ -12,10 +12,10 @@ Workspace now includes four developer launcher apps:
 - **Inspector** stores host diagnostics and creates a Frida Gadget preparation plan for guest IPAs managed by LiveContainer. `WorkspaceFridaGuestBridge.js` is the companion Gadget script: it polls the authenticated guest MCP queue, evaluates Frida JavaScript, and forwards console output. A Gadget binary, injection, and re-signing are still required before a guest can be instrumented.
 - **Network** runs an authenticated local HTTP/MCP bridge. It is restricted to `Workspace Files` and exposes `list_files`, `read_file`, `copy_file`, `move_file`, `delete_file`, and `make_directory`; it has no shell or access to other iOS sandboxes.
 - **Remote Desktop** detects a Moonlight IPA installed through LiveContainer and launches it from a stable workspace entry.
-- **Services** adds a loopback/LAN localhost health server, Raspberry Pi/SSH configuration, optional local-AI model registry, GitHub artifacts/PRs/issues/releases, and module installation state.
+- **Services** adds a loopback/LAN localhost health server, Raspberry Pi/SSH configuration, AI model registration, GitHub artifacts/PRs/issues/releases, and authenticated guest controls.
 - **Guest terminal** appears as a split overlay over a running LiveContainer guest. Its authenticated MCP protocol exposes `/guest/session`, `/guest/logs`, `/guest/eval`, `/guest/pending`, `/guest/result`, and `/guest/log`; a Frida Gadget bridge can poll evaluations, post results, and stream guest logs without granting the file bridge shell access.
 
-Settings > **Modules** controls the optional language, build, debugging, network, and AI-runtime modules so large toolchains and model files can be managed separately.
+All module surfaces are exposed by default. The app reports the payload reality separately: LiveContainer, signing, and the Workspace adapters are embedded; model weights are imported through Workspace Files; full Java/.NET/Python/LLVM toolchains remain remote builder dependencies on stock iOS.
 
 ### Build projects from Dev Studio
 

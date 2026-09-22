@@ -1,10 +1,11 @@
 import Foundation
 import SwiftUI
 
-/// The built-in developer modules shipped with Workspace.
+/// The built-in developer surfaces exposed by Workspace.
 ///
-/// Every module is enabled by default and shipped with the application. The
-/// registry remains for compatibility with older snapshots and callers.
+/// This registry describes the UI and protocol surface. `WorkspaceModuleBundle`
+/// is the authoritative source for whether an executable runtime is embedded,
+/// whether an external asset is required, or whether work is remote-only.
 enum WorkspaceModuleID: String, CaseIterable, Codable, Hashable, Identifiable {
     case java
     case c
@@ -115,17 +116,11 @@ enum WorkspaceModuleID: String, CaseIterable, Codable, Hashable, Identifiable {
 
     /// A user-facing indication of where the module's heavy work happens.
     var executionNote: String {
-        switch self {
-        case .java, .c, .cpp, .dotnet, .python, .webAssembly, .localAI:
-            return "On device"
-        case .swiftObjectiveC, .javascript:
-            return "On device and remote"
-        case .miniXcode, .githubActions, .macOSBuilder, .windowsBuilder, .raspberryPi, .simulator:
-            return "Remote build"
-        case .ipaSigner, .liveContainer, .debugger, .frida, .jitSetup, .localhostServer, .fileManager, .installerStore:
-            return "On device"
-        case .moonlight, .sshDevelopment, .mcpBridge, .gitHubManager:
-            return "Network"
+        switch WorkspaceModuleBundle.info(for: self).payload {
+        case .embeddedRuntime: return "On device"
+        case .embeddedAdapter: return "On-device adapter"
+        case .externalAssetRequired: return "External asset"
+        case .remoteOnly: return "Remote builder"
         }
     }
 
@@ -139,11 +134,11 @@ enum WorkspaceModuleID: String, CaseIterable, Codable, Hashable, Identifiable {
 
     var summary: String {
         switch self {
-        case .java: return "Compile and run Java bytecode; native packaging uses the configured build runner."
-        case .c: return "Compile C to WASI locally or to a Windows/iOS target remotely."
-        case .cpp: return "Compile C++ to WASI locally or to a Windows/iOS target remotely."
-        case .dotnet: return "Run managed .NET programs locally and publish native targets remotely."
-        case .python: return "Run Python projects locally and package them with the selected build runner."
+        case .java: return "Edit Java projects and submit compilation to the configured build runner."
+        case .c: return "Edit C projects and compile them on a configured remote builder."
+        case .cpp: return "Edit C++ projects and compile them on a configured remote builder."
+        case .dotnet: return "Edit .NET projects and publish them on a configured remote builder."
+        case .python: return "Edit Python projects and run or package them on a configured builder."
         case .swiftObjectiveC: return "Edit Apple-language projects and send them to Xcode for builds."
         case .javascript: return "Build web, desktop, and native projects from one workspace."
         case .webAssembly: return "Portable sandbox for C, C++, Rust, and other compiled modules."
@@ -161,7 +156,7 @@ enum WorkspaceModuleID: String, CaseIterable, Codable, Hashable, Identifiable {
         case .moonlight: return "Open a low-latency remote desktop or game-streaming session."
         case .sshDevelopment: return "Connect to the Pi, Mac, or Windows builder over SSH."
         case .mcpBridge: return "Expose authenticated workspace file tools on the local network."
-        case .localAI: return "Run an optional on-device coding model with downloaded weights."
+        case .localAI: return "Chat UI for an imported model file; an iOS inference backend is still required."
         case .gitHubManager: return "Manage repositories, branches, commits, workflows, and artifacts."
         case .fileManager: return "Manage source, IPA, signing, and build files in app storage."
         case .installerStore: return "Browse repositories and choose signing or LiveContainer installs."
@@ -179,8 +174,9 @@ final class WorkspaceModuleStore: ObservableObject {
     private let defaultsKey = "workspace.enabledModules.v2"
 
     init() {
-        // Every module ships in the IPA. The store remains useful for future
-        // feature flags, but a fresh install must expose the complete surface.
+        // Expose every registered surface by default. This does not imply that
+        // every heavy compiler, runtime, or model asset is embedded; the
+        // payload inventory reports those requirements separately.
         let allModules = Set(WorkspaceModuleID.allCases)
         if let data = UserDefaults.standard.data(forKey: defaultsKey),
            let values = try? JSONDecoder().decode(Set<WorkspaceModuleID>.self, from: data) {
@@ -203,7 +199,8 @@ final class WorkspaceModuleStore: ObservableObject {
     }
 
     func setEnabled(_ value: Bool, for module: WorkspaceModuleID) {
-        // Module installation was removed: all modules are bundled and active.
+        // Module installation was removed: all registered surfaces remain
+        // active, while payload availability is reported by the inventory.
         enabled = Set(WorkspaceModuleID.allCases)
         persist()
     }
@@ -224,4 +221,3 @@ final class WorkspaceModuleStore: ObservableObject {
         UserDefaults.standard.set(data, forKey: defaultsKey)
     }
 }
-
