@@ -35,7 +35,7 @@ private enum SigningShareKind: String {
         switch fileURL.pathExtension.lowercased() {
         case "p12", "pfx": self = .certificate
         case "mobileprovision", "provisionprofile": self = .provisioningProfile
-        case "gguf", "ggml", "safetensors", "mlmodel", "mlpackage", "onnx", "bin", "model": self = .aiModel
+        case "gguf", "ggml", "safetensors", "mlmodel", "mlmodelc", "mlpackage", "onnx", "bin", "model": self = .aiModel
         default: return nil
         }
     }

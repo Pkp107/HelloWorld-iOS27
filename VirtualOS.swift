@@ -552,7 +552,7 @@ final class WorkspaceStore: ObservableObject {
             // Model files are copied into app-owned storage so the AI app can
             // consume them without relying on UIDocumentPicker callbacks.
             // This also gives Share Sheet imports a stable, visible location.
-            case "gguf", "ggml", "safetensors", "mlmodel", "mlpackage", "onnx", "bin": folder = "AI Models"
+            case "gguf", "ggml", "safetensors", "mlmodel", "mlmodelc", "mlpackage", "onnx", "bin", "model": folder = "AI Models"
             case "p12", "pfx": folder = "Certificates"
             case "mobileprovision", "provisionprofile": folder = "Provisioning Profiles"
             default: folder = "Incoming"

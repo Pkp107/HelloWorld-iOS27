@@ -769,7 +769,14 @@ struct WorkspaceFileManagerView: View {
                 guard let provider = providers.first else { return false }
                 provider.loadFileRepresentation(forTypeIdentifier: UTType.item.identifier) { url, error in
                     if let url {
-                        Task { @MainActor in _ = store.copyToWorkspaceFiles(from: url) }
+                        let stagingURL = FileManager.default.temporaryDirectory
+                            .appendingPathComponent(UUID().uuidString)
+                            .appendingPathExtension(url.pathExtension)
+                        try? FileManager.default.copyItem(at: url, to: stagingURL)
+                        Task { @MainActor in
+                            _ = store.copyToWorkspaceFiles(from: stagingURL)
+                            try? FileManager.default.removeItem(at: stagingURL)
+                        }
                     } else if let error {
                         Task { @MainActor in store.importError = error.localizedDescription }
                     }

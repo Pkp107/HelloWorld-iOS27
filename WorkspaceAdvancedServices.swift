@@ -311,7 +311,7 @@ final class WorkspaceAIChatModel: ObservableObject {
             roots.append(shared.appendingPathComponent("Workspace-iOS27/AI Models/Incoming", isDirectory: true))
         }
 #endif
-        let allowed = Set(["gguf", "ggml", "safetensors", "mlmodel", "mlpackage", "onnx", "bin", "model"])
+        let allowed = Set(["gguf", "ggml", "safetensors", "mlmodel", "mlmodelc", "mlpackage", "onnx", "bin", "model"])
         var results: [URL] = []
         for root in roots {
             guard let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey], options: [.skipsHiddenFiles]) else { continue }
@@ -319,8 +319,8 @@ final class WorkspaceAIChatModel: ObservableObject {
                 let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
                 // Core ML packages are directories; all other supported model
                 // formats are regular files.
-                guard allowed.contains(url.pathExtension.lowercased()),
-                      !isDirectory || url.pathExtension.lowercased() == "mlpackage" else { continue }
+                let ext = url.pathExtension.lowercased()
+                guard allowed.contains(ext), !isDirectory || ext == "mlpackage" || ext == "mlmodelc" else { continue }
                 results.append(url)
             }
         }
@@ -517,8 +517,13 @@ struct WorkspaceAIChatView: View {
                 guard let provider = providers.first else { return false }
                 provider.loadFileRepresentation(forTypeIdentifier: UTType.item.identifier) { url, _ in
                     guard let url else { return }
+                    let stagingURL = FileManager.default.temporaryDirectory
+                        .appendingPathComponent(UUID().uuidString)
+                        .appendingPathExtension(url.pathExtension)
+                    try? FileManager.default.copyItem(at: url, to: stagingURL)
                     Task { @MainActor in
-                        _ = model.importWorkspaceModel(from: url)
+                        _ = model.importWorkspaceModel(from: stagingURL)
+                        try? FileManager.default.removeItem(at: stagingURL)
                     }
                 }
                 return true
