@@ -358,7 +358,7 @@ function performKey(command) {
     return key + ' action sent';
   }
   if (key === 'delete' || key === 'backspace') {
-    application.sendAction_to_from_forEvent_('deleteBackward:', null, null, null);
+    application.sendAction_to_from_forEvent_('deleteBackward', null, null, null);
     return 'delete action sent';
   }
   throw new Error('Unsupported key. Allowed keys are return, escape, back, home, delete, and backspace.');
