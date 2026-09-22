@@ -70,16 +70,32 @@ struct WorkspaceGitHubModuleEntry: Decodable {
         title = try values.decodeIfPresent(String.self, forKey: .title)
         version = try values.decodeIfPresent(String.self, forKey: .version)
         let decodedSummary = try values.decodeIfPresent(String.self, forKey: .summary)
-        summary = decodedSummary ?? (try values.decodeIfPresent(String.self, forKey: .description))
+        if let decodedSummary {
+            summary = decodedSummary
+        } else {
+            summary = try values.decodeIfPresent(String.self, forKey: .description)
+        }
         payload = try values.decodeIfPresent(WorkspaceModulePayloadKind.self, forKey: .payload)
         let explicitURL = try values.decodeIfPresent(URL.self, forKey: .downloadURL)
-        downloadURL = explicitURL ?? (try values.decodeIfPresent(URL.self, forKey: .downloadUrl))
+        if let explicitURL {
+            downloadURL = explicitURL
+        } else {
+            downloadURL = try values.decodeIfPresent(URL.self, forKey: .downloadUrl)
+        }
         assetName = try values.decodeIfPresent(String.self, forKey: .assetName)
         sha256 = try values.decodeIfPresent(String.self, forKey: .sha256)
         let explicitSize = try values.decodeIfPresent(Int64.self, forKey: .sizeBytes)
-        sizeBytes = explicitSize ?? (try values.decodeIfPresent(Int64.self, forKey: .size))
+        if let explicitSize {
+            sizeBytes = explicitSize
+        } else {
+            sizeBytes = try values.decodeIfPresent(Int64.self, forKey: .size)
+        }
         let explicitReleaseURL = try values.decodeIfPresent(URL.self, forKey: .releaseURL)
-        releaseURL = explicitReleaseURL ?? (try values.decodeIfPresent(URL.self, forKey: .releaseUrl))
+        if let explicitReleaseURL {
+            releaseURL = explicitReleaseURL
+        } else {
+            releaseURL = try values.decodeIfPresent(URL.self, forKey: .releaseUrl)
+        }
     }
 }
 
@@ -163,6 +179,9 @@ final class WorkspaceGitHubModuleCatalog: ObservableObject {
             guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
                 throw WorkspaceGitHubModuleCatalogError.requestFailed
             }
+            guard let finalHost = response.url?.host?.lowercased(), isGitHubHost(finalHost) else {
+                throw WorkspaceGitHubModuleCatalogError.invalidDownload
+            }
             let values = try temporaryURL.resourceValues(forKeys: [.fileSizeKey])
             if let fileSize = values.fileSize, Int64(fileSize) > Self.maxDownloadBytes {
                 throw WorkspaceGitHubModuleCatalogError.fileTooLarge
@@ -173,7 +192,7 @@ final class WorkspaceGitHubModuleCatalog: ObservableObject {
                 while let chunk = try handle.read(upToCount: 1024 * 1024), !chunk.isEmpty {
                     hasher.update(data: chunk)
                 }
-                try handle.close()
+                handle.closeFile()
                 let digest = hasher.finalize()
                     .map { String(format: "%02x", $0) }.joined()
                 guard digest.caseInsensitiveCompare(expected) == .orderedSame else {
@@ -246,9 +265,7 @@ final class WorkspaceGitHubModuleCatalog: ObservableObject {
             throw WorkspaceGitHubModuleCatalogError.invalidManifest
         }
         guard download.scheme?.lowercased() == "https",
-              let host = download.host?.lowercased(),
-              host == "github.com" || host == "raw.githubusercontent.com" ||
-              host == "objects.githubusercontent.com" || host.hasSuffix(".githubusercontent.com") else {
+              let host = download.host?.lowercased(), isGitHubHost(host) else {
             throw WorkspaceGitHubModuleCatalogError.invalidDownload
         }
         return WorkspaceDownloadableModule(
@@ -268,6 +285,11 @@ final class WorkspaceGitHubModuleCatalog: ObservableObject {
         guard let value else { return nil }
         let normalized = value.lowercased().replacingOccurrences(of: "sha256:", with: "").filter { $0.isHexDigit }
         return normalized.count == 64 ? normalized : nil
+    }
+
+    private func isGitHubHost(_ host: String) -> Bool {
+        host == "github.com" || host == "raw.githubusercontent.com" ||
+        host == "objects.githubusercontent.com" || host.hasSuffix(".githubusercontent.com")
     }
 
     private func makeRequest(_ url: URL) -> URLRequest {
