@@ -1,12 +1,10 @@
 import Foundation
 import SwiftUI
 
-/// The optional developer modules that can be installed into Workspace.
+/// The built-in developer modules shipped with Workspace.
 ///
-/// The registry is deliberately metadata-only: it records the user's module
-/// choices and gives the UI a stable place to attach installers later. Heavy
-/// toolchains are downloaded by their owning module instead of being bundled
-/// into the Workspace application.
+/// Every module is enabled by default and shipped with the application. The
+/// registry remains for compatibility with older snapshots and callers.
 enum WorkspaceModuleID: String, CaseIterable, Codable, Hashable, Identifiable {
     case java
     case c
@@ -172,7 +170,7 @@ enum WorkspaceModuleID: String, CaseIterable, Codable, Hashable, Identifiable {
     }
 }
 
-/// Persists optional module choices independently of the workspace snapshot so
+/// Persists the built-in module set independently of the workspace snapshot so
 /// older snapshots remain readable and modules can evolve without migrations.
 @MainActor
 final class WorkspaceModuleStore: ObservableObject {
@@ -205,11 +203,8 @@ final class WorkspaceModuleStore: ObservableObject {
     }
 
     func setEnabled(_ value: Bool, for module: WorkspaceModuleID) {
-        if value {
-            enabled.insert(module)
-        } else {
-            enabled.remove(module)
-        }
+        // Module installation was removed: all modules are bundled and active.
+        enabled = Set(WorkspaceModuleID.allCases)
         persist()
     }
 
@@ -219,7 +214,8 @@ final class WorkspaceModuleStore: ObservableObject {
     }
 
     func disableOptional() {
-        enabled = Set([.miniXcode, .githubActions, .gitHubManager, .fileManager, .installerStore, .liveContainer, .jitSetup])
+        // Compatibility no-op retained for old callers.
+        enabled = Set(WorkspaceModuleID.allCases)
         persist()
     }
 
@@ -229,72 +225,3 @@ final class WorkspaceModuleStore: ObservableObject {
     }
 }
 
-struct WorkspaceModulesView: View {
-    @ObservedObject var store: WorkspaceModuleStore
-
-    private var enabledCount: Int { store.enabled.count }
-    private var categories: [String] {
-        Array(Set(store.modules.map(\.category))).sorted()
-    }
-
-    var body: some View {
-        List {
-            Section {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Add the tools you need")
-                        .font(.headline)
-                    Text("Large runtimes are optional. Workspace keeps your choices here and downloads each module when its installer is available.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                    ProgressView(value: Double(enabledCount), total: Double(WorkspaceModuleID.allCases.count)) {
-                        Text("\(enabledCount) of \(WorkspaceModuleID.allCases.count) enabled")
-                    }
-                }
-                .padding(.vertical, 4)
-            }
-
-            ForEach(categories, id: \.self) { category in
-                Section(category) {
-                    ForEach(store.modules.filter { $0.category == category }) { module in
-                        moduleRow(module)
-                    }
-                }
-            }
-
-            Section("Quick actions") {
-                Button("Enable all modules") { store.enableAll() }
-                Button("Keep core modules only") { store.disableOptional() }
-            }
-        }
-        .navigationTitle("Modules")
-    }
-
-    private func moduleRow(_ module: WorkspaceModuleID) -> some View {
-        Toggle(isOn: Binding(
-            get: { store.isEnabled(module) },
-            set: { store.setEnabled($0, for: module) }
-        )) {
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: module.symbol)
-                    .font(.title3)
-                    .foregroundStyle(.tint)
-                    .frame(width: 26)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(module.title)
-                        .font(.body.weight(.medium))
-                    Text(module.summary)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    HStack(spacing: 8) {
-                        Label(module.executionNote, systemImage: "location.fill")
-                        Label(module.storageEstimate, systemImage: "internaldrive")
-                    }
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                }
-            }
-        }
-        .accessibilityHint("Enable or disable the \(module.title) module")
-    }
-}
