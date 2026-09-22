@@ -26,6 +26,7 @@ cp "${ROOT_DIR}/WorkspaceMCPServer.swift" "${SHELL_ROOT}/WorkspaceMCPServer.swif
 cp "${ROOT_DIR}/WorkspaceAdvancedServices.swift" "${SHELL_ROOT}/WorkspaceAdvancedServices.swift"
 cp "${ROOT_DIR}/WorkspaceModuleBundle.swift" "${SHELL_ROOT}/WorkspaceModuleBundle.swift"
 cp "${ROOT_DIR}/GitHubModuleCatalog.swift" "${SHELL_ROOT}/GitHubModuleCatalog.swift"
+cp "${ROOT_DIR}/WorkspaceHelp.swift" "${SHELL_ROOT}/WorkspaceHelp.swift"
 cp "${ROOT_DIR}/LiveContainerRuntime.swift" "${SHELL_ROOT}/LiveContainerRuntime.swift"
 cp "${ROOT_DIR}/NativeWorkspaceViews.swift" "${SHELL_ROOT}/NativeWorkspaceViews.swift"
 cp "${ROOT_DIR}/NativeWorkspaceInstaller.swift" "${SHELL_ROOT}/NativeWorkspaceInstaller.swift"

@@ -19,13 +19,14 @@ enum SystemAppKind: String, Codable, CaseIterable, Hashable {
     case fileManager
     case devStudio
     case ai
+    case help
     case github
     case inspector
     case network
     case remoteDesktop
 
     static var allCases: [SystemAppKind] {
-        [.helloWorld, .installer, .fileManager, .devStudio, .ai, .remoteDesktop, .settings]
+        [.helloWorld, .installer, .fileManager, .devStudio, .ai, .help, .remoteDesktop, .settings]
     }
 
     init(from decoder: Decoder) throws {
@@ -61,6 +62,7 @@ enum SystemAppKind: String, Codable, CaseIterable, Hashable {
         case .fileManager: return "File Manager"
         case .devStudio: return "Developer"
         case .ai: return "AI"
+        case .help: return "Help"
         case .github: return "GitHub"
         case .inspector: return "Inspector"
         case .network: return "Network"
@@ -80,6 +82,7 @@ enum SystemAppKind: String, Codable, CaseIterable, Hashable {
         case .fileManager: return "folder.fill"
         case .devStudio: return "wrench.and.screwdriver.fill"
         case .ai: return "brain.head.profile"
+        case .help: return "questionmark.circle.fill"
         case .github: return "arrow.triangle.branch"
         case .inspector: return "ladybug.fill"
         case .network: return "network"
@@ -99,6 +102,7 @@ enum SystemAppKind: String, Codable, CaseIterable, Hashable {
         case .fileManager: return "teal"
         case .devStudio: return "blue"
         case .ai: return "purple"
+        case .help: return "indigo"
         case .github: return "purple"
         case .inspector: return "orange"
         case .network: return "green"
@@ -111,7 +115,7 @@ enum SystemAppKind: String, Codable, CaseIterable, Hashable {
         case .helloWorld: return "System"
         case .appLibrary, .settings, .ipaSigner, .installer, .liveContainer, .liveContainerSettings, .fileManager: return "Utilities"
         case .devStudio, .github, .inspector, .network, .remoteDesktop: return "Developer"
-        case .ai: return "Workspace"
+        case .ai, .help: return "Workspace"
         }
     }
 }
@@ -406,6 +410,7 @@ final class WorkspaceStore: ObservableObject {
         .fileManager: UUID(uuidString: "A7A82D56-1F2C-4B27-9FA9-000000000007")!,
         .devStudio: UUID(uuidString: "A7A82D56-1F2C-4B27-9FA9-000000000008")!,
         .ai: UUID(uuidString: "A7A82D56-1F2C-4B27-9FA9-000000000013")!,
+        .help: UUID(uuidString: "A7A82D56-1F2C-4B27-9FA9-000000000014")!,
         .github: UUID(uuidString: "A7A82D56-1F2C-4B27-9FA9-000000000009")!,
         .inspector: UUID(uuidString: "A7A82D56-1F2C-4B27-9FA9-000000000010")!,
         .network: UUID(uuidString: "A7A82D56-1F2C-4B27-9FA9-000000000011")!,
