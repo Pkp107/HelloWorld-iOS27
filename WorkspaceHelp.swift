@@ -281,7 +281,7 @@ private struct WorkspaceHelpTopic: Identifiable, Hashable {
             .init(title: "Watch the run", body: "Open Actions, select Build iOS 27 IPA, and inspect the job logs. Device and simulator builds are separate jobs."),
             .init(title: "Download artifacts", body: "When the run succeeds, download the unsigned IPA or simulator artifact. Sign a device IPA with authorized credentials before attempting installation."),
             .init(title: "Protect secrets", body: "For a private signing workflow, use GitHub encrypted secrets for the P12, password, and profile. Rotate them and avoid printing decoded files in logs."),
-        ], destination: .github, note: "A GitHub macOS runner is required for Xcode builds. The repository's default modules feed is empty until you publish package assets.")
+        ], destination: .devStudio, note: "A GitHub macOS runner is required for Xcode builds. The repository's default modules feed is empty until you publish package assets.")
 
     static let developerTools = WorkspaceHelpTopic(
         id: "developer-tools", title: "Developer tools and MCP", subtitle: "Inspector, logs, network, and sandbox tools", introduction: "Developer surfaces are grouped in the Developer app. MCP exposes authenticated workspace operations over the local network.", symbol: "wrench.and.screwdriver.fill", color: .blue,
@@ -300,7 +300,7 @@ private struct WorkspaceHelpTopic: Identifiable, Hashable {
             .init(title: "Check reachability", body: "Confirm the service is running, the port is listening, Local Network permission is enabled, and the Wi-Fi network allows peer traffic."),
             .init(title: "Use HTTPS carefully", body: "For a remote tunnel, verify the hostname and certificate, keep upload tokens private, and shut down or rotate a tunnel that was shared publicly."),
             .init(title: "Expect suspension", body: "Background execution and the approximately short grace period after leaving an app are not guaranteed. Resume the app for long transfers."),
-        ], destination: .network, note: "A tunnel does not make an unprotected service safe. Authenticate and authorize every request.")
+        ], destination: .devStudio, note: "A tunnel does not make an unprotected service safe. Authenticate and authorize every request.")
 
     static let troubleshooting = WorkspaceHelpTopic(
         id: "troubleshooting", title: "Troubleshooting", subtitle: "Fix the problems people hit most often", introduction: "Start with the matching symptom, retry once, and then use the diagnostic information shown by the relevant app.", symbol: "wrench.and.screwdriver.fill", color: .orange,
