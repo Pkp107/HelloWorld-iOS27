@@ -632,6 +632,16 @@ final class WorkspaceMCPServer: ObservableObject {
             "server": "Workspace MCP Bridge",
             "available_tools": available,
             "unavailable_tools": unavailable,
+            // Keep the module inventory next to capabilities so an AI client
+            // can distinguish bundled adapters from remote toolchains and
+            // imported model assets. This prevents a 5 MB host IPA from being
+            // advertised as if it contained gigabytes of compilers or weights.
+            "module_inventory": WorkspaceModuleBundle.diagnostics,
+            "module_counts": [
+                "total": WorkspaceModuleBundle.infos.count,
+                "embedded": WorkspaceModuleBundle.embeddedCount,
+                "external_asset_required": WorkspaceModuleBundle.externalAssetCount
+            ],
             "aliases": Self.aliases,
             "safety": ["read_only": readOnlyMode, "dangerous": dangerousMode],
             "limits": ["max_history": maxHistory, "max_file_read_bytes": 131_072]

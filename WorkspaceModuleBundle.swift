@@ -91,7 +91,7 @@ enum WorkspaceModuleBundle {
                 "present_in_ipa": info.isPresentInIPA,
                 "requires_external_asset": info.requiresExternalAsset,
                 "description": info.artifactDescription,
-                "external_asset_hint": info.externalAssetHint as Any
+                "external_asset_hint": info.externalAssetHint ?? NSNull()
             ]
         }
     }
