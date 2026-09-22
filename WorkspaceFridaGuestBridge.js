@@ -353,11 +353,15 @@ function performType(command) {
 function performKey(command) {
   const key = String(command.payload && command.payload.key || '').toLowerCase();
   const application = ObjC.classes.UIApplication.sharedApplication();
-  if (key === 'return' || key === 'escape' || key === 'back') {
+  if (key === 'return' || key === 'escape' || key === 'back' || key === 'home') {
     application.sendAction_to_from_forEvent_('resignFirstResponder', null, null, null);
     return key + ' action sent';
   }
-  throw new Error('Unsupported key. Allowed keys are return, escape, and back.');
+  if (key === 'delete' || key === 'backspace') {
+    application.sendAction_to_from_forEvent_('deleteBackward:', null, null, null);
+    return 'delete action sent';
+  }
+  throw new Error('Unsupported key. Allowed keys are return, escape, back, home, delete, and backspace.');
 }
 
 function performSwipe(command) {

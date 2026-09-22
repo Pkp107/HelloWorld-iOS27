@@ -915,6 +915,15 @@ final class WorkspaceGuestControlCenter {
             guard let key = arguments["key"] as? String, !key.isEmpty else { return ("400 Bad Request", refusal("missing_key", "key is required.")) }
             let id = WorkspaceGuestSessionStore.shared.submitControlCommand(kind: "key", snapshotID: snapshot.id, elementToken: elementToken, payload: ["key": key])
             return ("202 Accepted", queued(id, snapshot.id, "key"))
+        case "guest_double_tap", "guest_long_press", "guest_scroll", "guest_set_text",
+             "guest_focus", "guest_keyboard", "guest_clipboard", "guest_accessibility_snapshot",
+             "guest_runtime_info", "guest_metrics", "guest_filesystem":
+            let kind = String(tool.dropFirst("guest_".count))
+            var payload = arguments
+            payload.removeValue(forKey: "snapshot_id")
+            payload.removeValue(forKey: "element_token")
+            let id = WorkspaceGuestSessionStore.shared.submitControlCommand(kind: kind, snapshotID: snapshot.id, elementToken: elementToken, payload: payload)
+            return ("202 Accepted", queued(id, snapshot.id, kind))
         default:
             return ("400 Bad Request", refusal("unknown_control", "Unsupported guest control tool."))
         }
@@ -1150,6 +1159,687 @@ private struct WorkspaceGuestSplitOverlayView: View {
                 }
                 try? await Task.sleep(nanoseconds: 50_000_000)
             }
+        }
+    }
+}
+
+// MARK: - Guest lifecycle, task metadata, and metrics
+
+enum WorkspaceGuestLifecycleState: String, Codable, CaseIterable, Hashable {
+    case idle
+    case launching
+    case running
+    case paused
+    case stopping
+    case stopped
+    case failed
+}
+
+enum WorkspaceGuestTaskState: String, Codable, CaseIterable, Hashable {
+    case queued
+    case running
+    case succeeded
+    case failed
+    case cancelled
+}
+
+struct WorkspaceGuestTaskMetadata: Identifiable, Codable, Hashable {
+    let id: UUID
+    let sessionID: String
+    let appName: String
+    let bundleIdentifier: String
+    let operation: String
+    let createdAt: Date
+    var startedAt: Date?
+    var completedAt: Date?
+    var state: WorkspaceGuestTaskState
+    var progress: Double
+    var detail: String
+    var error: String?
+
+    init(
+        id: UUID = UUID(),
+        sessionID: String,
+        appName: String,
+        bundleIdentifier: String,
+        operation: String,
+        createdAt: Date = .now,
+        state: WorkspaceGuestTaskState = .queued,
+        progress: Double = 0,
+        detail: String = "Queued"
+    ) {
+        self.id = id
+        self.sessionID = sessionID
+        self.appName = appName
+        self.bundleIdentifier = bundleIdentifier
+        self.operation = operation
+        self.createdAt = createdAt
+        self.startedAt = nil
+        self.completedAt = nil
+        self.state = state
+        self.progress = min(1, max(0, progress))
+        self.detail = detail
+        self.error = nil
+    }
+}
+
+@MainActor
+final class WorkspaceGuestTaskStore: ObservableObject {
+    static let shared = WorkspaceGuestTaskStore()
+
+    @Published private(set) var tasks: [WorkspaceGuestTaskMetadata]
+
+    private let defaultsKey = "workspace.guestTasks.v1"
+    private let maximumTasks = 250
+
+    private init() {
+        if let data = UserDefaults.standard.data(forKey: defaultsKey),
+           let saved = try? JSONDecoder().decode([WorkspaceGuestTaskMetadata].self, from: data) {
+            tasks = saved
+        } else {
+            tasks = []
+        }
+        prune()
+    }
+
+    @discardableResult
+    func enqueue(sessionID: String, appName: String, bundleIdentifier: String, operation: String, detail: String = "Queued") -> UUID {
+        let task = WorkspaceGuestTaskMetadata(
+            sessionID: sessionID,
+            appName: appName,
+            bundleIdentifier: bundleIdentifier,
+            operation: operation,
+            detail: detail
+        )
+        tasks.append(task)
+        prune()
+        persist()
+        return task.id
+    }
+
+    func start(_ id: UUID, detail: String = "Running") {
+        update(id) { task in
+            task.state = .running
+            task.startedAt = task.startedAt ?? .now
+            task.progress = max(task.progress, 0.01)
+            task.detail = detail
+            task.error = nil
+        }
+    }
+
+    func update(_ id: UUID, progress: Double? = nil, detail: String? = nil) {
+        update(id) { task in
+            if let progress { task.progress = min(1, max(0, progress)) }
+            if let detail { task.detail = detail }
+        }
+    }
+
+    func succeed(_ id: UUID, detail: String = "Completed") {
+        update(id) { task in
+            task.state = .succeeded
+            task.progress = 1
+            task.completedAt = .now
+            task.detail = detail
+            task.error = nil
+        }
+    }
+
+    func fail(_ id: UUID, error: String, detail: String = "Failed") {
+        update(id) { task in
+            task.state = .failed
+            task.completedAt = .now
+            task.detail = detail
+            task.error = error
+        }
+    }
+
+    func cancel(_ id: UUID, detail: String = "Cancelled") {
+        update(id) { task in
+            task.state = .cancelled
+            task.completedAt = .now
+            task.detail = detail
+        }
+    }
+
+    func tasks(for sessionID: String) -> [WorkspaceGuestTaskMetadata] {
+        tasks.filter { $0.sessionID == sessionID }.sorted { $0.createdAt > $1.createdAt }
+    }
+
+    func remove(_ id: UUID) {
+        tasks.removeAll { $0.id == id }
+        persist()
+    }
+
+    private func update(_ id: UUID, mutation: (inout WorkspaceGuestTaskMetadata) -> Void) {
+        guard let index = tasks.firstIndex(where: { $0.id == id }) else { return }
+        mutation(&tasks[index])
+        persist()
+    }
+
+    private func prune() {
+        guard tasks.count > maximumTasks else { return }
+        tasks.sort { $0.createdAt > $1.createdAt }
+        tasks = Array(tasks.prefix(maximumTasks))
+    }
+
+    private func persist() {
+        guard let data = try? JSONEncoder().encode(tasks) else { return }
+        UserDefaults.standard.set(data, forKey: defaultsKey)
+    }
+}
+
+@MainActor
+final class WorkspaceGuestLifecycleCoordinator: ObservableObject {
+    static let shared = WorkspaceGuestLifecycleCoordinator()
+
+    @Published private(set) var state: WorkspaceGuestLifecycleState = .idle
+    @Published private(set) var activeTaskID: UUID?
+    @Published private(set) var lastError: String?
+
+    private init() {}
+
+    func beginLaunch(appName: String, bundleIdentifier: String, operation: String = "launch") {
+        WorkspaceGuestSessionStore.shared.start(appName: appName, bundleIdentifier: bundleIdentifier)
+        let session = WorkspaceGuestSessionStore.shared
+        activeTaskID = WorkspaceGuestTaskStore.shared.enqueue(
+            sessionID: session.sessionID,
+            appName: appName,
+            bundleIdentifier: bundleIdentifier,
+            operation: operation,
+            detail: "Waiting for LiveContainer"
+        )
+        if let activeTaskID { WorkspaceGuestTaskStore.shared.start(activeTaskID, detail: "Launching guest") }
+        state = .launching
+        lastError = nil
+        session.appendLog("Launch requested for \(appName).", level: "system")
+    }
+
+    func markRunning(detail: String = "Guest running") {
+        state = .running
+        if let activeTaskID { WorkspaceGuestTaskStore.shared.update(activeTaskID, progress: 0.5, detail: detail) }
+        WorkspaceGuestSessionStore.shared.setBridgeConnected(true)
+    }
+
+    func pause(detail: String = "Paused by user") {
+        guard state == .running else { return }
+        state = .paused
+        if let activeTaskID { WorkspaceGuestTaskStore.shared.update(activeTaskID, detail: detail) }
+        WorkspaceGuestSessionStore.shared.appendLog(detail, level: "system")
+    }
+
+    func resume(detail: String = "Resumed") {
+        guard state == .paused else { return }
+        state = .running
+        if let activeTaskID { WorkspaceGuestTaskStore.shared.update(activeTaskID, detail: detail) }
+        WorkspaceGuestSessionStore.shared.appendLog(detail, level: "system")
+    }
+
+    func fail(_ message: String) {
+        state = .failed
+        lastError = message
+        if let activeTaskID { WorkspaceGuestTaskStore.shared.fail(activeTaskID, error: message) }
+        WorkspaceGuestSessionStore.shared.appendLog(message, level: "error")
+    }
+
+    func stop(reason: String = "Stopped by user") {
+        guard state != .idle && state != .stopped else { return }
+        state = .stopping
+        if let activeTaskID { WorkspaceGuestTaskStore.shared.succeed(activeTaskID, detail: reason) }
+        WorkspaceGuestSessionStore.shared.stop(reason: reason)
+        activeTaskID = nil
+        state = .stopped
+    }
+}
+
+struct WorkspaceGuestMetricSample: Identifiable, Codable, Hashable {
+    let id: UUID
+    let sessionID: String
+    let timestamp: Date
+    let cpuPercent: Double?
+    let memoryBytes: UInt64?
+    let frameRate: Double?
+    let networkBytes: UInt64?
+    let note: String?
+
+    init(
+        sessionID: String,
+        timestamp: Date = .now,
+        cpuPercent: Double? = nil,
+        memoryBytes: UInt64? = nil,
+        frameRate: Double? = nil,
+        networkBytes: UInt64? = nil,
+        note: String? = nil
+    ) {
+        self.id = UUID()
+        self.sessionID = sessionID
+        self.timestamp = timestamp
+        self.cpuPercent = cpuPercent
+        self.memoryBytes = memoryBytes
+        self.frameRate = frameRate
+        self.networkBytes = networkBytes
+        self.note = note
+    }
+}
+
+@MainActor
+final class WorkspaceGuestMetricsStore: ObservableObject {
+    static let shared = WorkspaceGuestMetricsStore()
+
+    @Published private(set) var samples: [WorkspaceGuestMetricSample] = []
+    private let defaultsKey = "workspace.guestMetrics.v1"
+    private let maximumSamples = 300
+
+    private init() {
+        if let data = UserDefaults.standard.data(forKey: defaultsKey),
+           let saved = try? JSONDecoder().decode([WorkspaceGuestMetricSample].self, from: data) {
+            samples = saved
+        }
+        prune()
+    }
+
+    func append(_ sample: WorkspaceGuestMetricSample) {
+        samples.append(sample)
+        prune()
+        persist()
+    }
+
+    func samples(for sessionID: String) -> [WorkspaceGuestMetricSample] {
+        samples.filter { $0.sessionID == sessionID }.sorted { $0.timestamp < $1.timestamp }
+    }
+
+    func latest(for sessionID: String) -> WorkspaceGuestMetricSample? {
+        samples.filter { $0.sessionID == sessionID }.max { $0.timestamp < $1.timestamp }
+    }
+
+    func clear(sessionID: String? = nil) {
+        if let sessionID { samples.removeAll { $0.sessionID == sessionID } }
+        else { samples.removeAll() }
+        persist()
+    }
+
+    private func prune() {
+        guard samples.count > maximumSamples else { return }
+        samples.sort { $0.timestamp > $1.timestamp }
+        samples = Array(samples.prefix(maximumSamples))
+    }
+
+    private func persist() {
+        guard let data = try? JSONEncoder().encode(samples) else { return }
+        UserDefaults.standard.set(data, forKey: defaultsKey)
+    }
+}
+
+// MARK: - Active-guest scoped filesystem
+
+struct WorkspaceGuestFileEntry: Identifiable, Codable, Hashable {
+    let id: String
+    let relativePath: String
+    let isDirectory: Bool
+    let byteCount: UInt64
+    let modifiedAt: Date?
+}
+
+enum WorkspaceGuestFilesystemError: LocalizedError {
+    case noActiveGuest
+    case pathEscapesRoot
+    case missingPath
+    case notDirectory
+    case readLimitExceeded
+    case writeLimitExceeded
+    case invalidText
+
+    var errorDescription: String? {
+        switch self {
+        case .noActiveGuest: return "No LiveContainer guest is active."
+        case .pathEscapesRoot: return "The path must stay inside the active guest workspace."
+        case .missingPath: return "The guest path does not exist."
+        case .notDirectory: return "The guest path is not a directory."
+        case .readLimitExceeded: return "The file exceeds the 2 MiB read limit."
+        case .writeLimitExceeded: return "The file exceeds the 2 MiB write limit."
+        case .invalidText: return "The file is not valid UTF-8 text."
+        }
+    }
+}
+
+/// A mirror workspace for the active guest. It intentionally never accepts an
+/// arbitrary app identifier, and every path is checked after symlink resolution.
+/// The native guest's private sandbox remains inaccessible unless its Gadget
+/// explicitly exposes a file operation through the guest bridge.
+struct WorkspaceGuestFilesystem {
+    let rootDirectory: URL
+    let sessionID: String
+
+    private let fileManager = FileManager.default
+    private let maximumReadBytes: UInt64 = 2 * 1_024 * 1_024
+    private let maximumWriteBytes: UInt64 = 2 * 1_024 * 1_024
+
+    @MainActor
+    static func active(baseDirectory: URL? = nil) throws -> WorkspaceGuestFilesystem {
+        let session = WorkspaceGuestSessionStore.shared
+        guard session.isActive, let bundle = session.bundleIdentifier, !bundle.isEmpty else {
+            throw WorkspaceGuestFilesystemError.noActiveGuest
+        }
+        let documents = baseDirectory ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let workspace = documents.appendingPathComponent("Workspace Files", isDirectory: true)
+        let guestName = bundle.unicodeScalars.map { scalar -> String in
+            let allowed = CharacterSet.alphanumerics
+            return allowed.contains(scalar) ? String(scalar) : "_"
+        }.joined()
+        let root = workspace
+            .appendingPathComponent("Guest Sandboxes", isDirectory: true)
+            .appendingPathComponent(guestName.isEmpty ? "Guest" : guestName, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        return WorkspaceGuestFilesystem(rootDirectory: root, sessionID: session.sessionID)
+    }
+
+    func list(relativePath: String = "") throws -> [WorkspaceGuestFileEntry] {
+        let directory = try resolve(relativePath, requireExisting: true)
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: directory.path, isDirectory: &isDirectory) else { throw WorkspaceGuestFilesystemError.missingPath }
+        guard isDirectory.boolValue else { throw WorkspaceGuestFilesystemError.notDirectory }
+        let urls = try fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        )
+        return try urls.sorted { $0.lastPathComponent.localizedCaseInsensitiveCompare($1.lastPathComponent) == .orderedAscending }.map { url in
+            let values = try url.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey])
+            let relative = relativePath(for: url)
+            return WorkspaceGuestFileEntry(
+                id: relative,
+                relativePath: relative,
+                isDirectory: values.isDirectory ?? false,
+                byteCount: UInt64(values.fileSize ?? 0),
+                modifiedAt: values.contentModificationDate
+            )
+        }
+    }
+
+    func readText(relativePath: String) throws -> String {
+        let url = try resolve(relativePath, requireExisting: true)
+        guard let values = try? url.resourceValues(forKeys: [.fileSizeKey]),
+              UInt64(values.fileSize ?? 0) <= maximumReadBytes else { throw WorkspaceGuestFilesystemError.readLimitExceeded }
+        let data = try Data(contentsOf: url, options: [.mappedIfSafe])
+        guard UInt64(data.count) <= maximumReadBytes, let text = String(data: data, encoding: .utf8) else { throw WorkspaceGuestFilesystemError.invalidText }
+        return text
+    }
+
+    func writeText(_ text: String, relativePath: String) throws {
+        guard let data = text.data(using: .utf8), UInt64(data.count) <= maximumWriteBytes else { throw WorkspaceGuestFilesystemError.writeLimitExceeded }
+        let url = try resolve(relativePath, requireExisting: false)
+        try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try data.write(to: url, options: .atomic)
+    }
+
+    func makeDirectory(relativePath: String) throws {
+        let url = try resolve(relativePath, requireExisting: false)
+        try fileManager.createDirectory(at: url, withIntermediateDirectories: true)
+    }
+
+    func remove(relativePath: String) throws {
+        let url = try resolve(relativePath, requireExisting: true)
+        guard url != rootDirectory else { throw WorkspaceGuestFilesystemError.pathEscapesRoot }
+        try fileManager.removeItem(at: url)
+    }
+
+    private func resolve(_ relativePath: String, requireExisting: Bool) throws -> URL {
+        let candidate = rootDirectory.appendingPathComponent(relativePath, isDirectory: false).standardizedFileURL
+        let root = rootDirectory.standardizedFileURL
+        guard candidate.path == root.path || candidate.path.hasPrefix(root.path + "/") else { throw WorkspaceGuestFilesystemError.pathEscapesRoot }
+        if requireExisting {
+            guard fileManager.fileExists(atPath: candidate.path) else { throw WorkspaceGuestFilesystemError.missingPath }
+            let resolved = candidate.resolvingSymlinksInPath().standardizedFileURL
+            guard resolved.path == root.path || resolved.path.hasPrefix(root.path + "/") else { throw WorkspaceGuestFilesystemError.pathEscapesRoot }
+            return resolved
+        }
+        let parent = candidate.deletingLastPathComponent().resolvingSymlinksInPath().standardizedFileURL
+        guard parent.path == root.path || parent.path.hasPrefix(root.path + "/") else { throw WorkspaceGuestFilesystemError.pathEscapesRoot }
+        return candidate
+    }
+
+    private func relativePath(for url: URL) -> String {
+        let rootPath = rootDirectory.standardizedFileURL.path
+        let value = url.standardizedFileURL.path
+        guard value.hasPrefix(rootPath + "/") else { return url.lastPathComponent }
+        return String(value.dropFirst(rootPath.count + 1))
+    }
+}
+
+// MARK: - Persisted workflows and macros
+
+enum WorkspaceWorkflowAction: String, Codable, CaseIterable, Hashable {
+    case captureGuestState
+    case refreshGuestLogs
+    case executeGuestScript
+    case copyWorkspaceFile
+    case buildGitHubActions
+    case openRemoteDesktop
+    case waitForBridge
+}
+
+struct WorkspaceWorkflowStep: Identifiable, Codable, Hashable {
+    let id: UUID
+    var action: WorkspaceWorkflowAction
+    var title: String
+    var parameters: [String: String]
+    var enabled: Bool
+
+    init(id: UUID = UUID(), action: WorkspaceWorkflowAction, title: String, parameters: [String: String] = [:], enabled: Bool = true) {
+        self.id = id
+        self.action = action
+        self.title = title
+        self.parameters = parameters
+        self.enabled = enabled
+    }
+}
+
+struct WorkspaceWorkflowDefinition: Identifiable, Codable, Hashable {
+    let id: UUID
+    var name: String
+    var createdAt: Date
+    var updatedAt: Date
+    var steps: [WorkspaceWorkflowStep]
+    var enabled: Bool
+    var lastRunAt: Date?
+    var lastRunState: WorkspaceGuestTaskState?
+
+    init(id: UUID = UUID(), name: String, steps: [WorkspaceWorkflowStep] = []) {
+        self.id = id
+        self.name = name
+        self.createdAt = .now
+        self.updatedAt = .now
+        self.steps = steps
+        self.enabled = true
+        self.lastRunAt = nil
+        self.lastRunState = nil
+    }
+}
+
+@MainActor
+final class WorkspaceWorkflowStore: ObservableObject {
+    static let shared = WorkspaceWorkflowStore()
+
+    @Published private(set) var workflows: [WorkspaceWorkflowDefinition]
+    private let defaultsKey = "workspace.workflows.v1"
+
+    private init() {
+        if let data = UserDefaults.standard.data(forKey: defaultsKey),
+           let saved = try? JSONDecoder().decode([WorkspaceWorkflowDefinition].self, from: data) {
+            workflows = saved
+        } else {
+            workflows = [Self.defaultGuestDiagnostics]
+            persist()
+        }
+    }
+
+    func upsert(_ workflow: WorkspaceWorkflowDefinition) {
+        var value = workflow
+        value.updatedAt = .now
+        if let index = workflows.firstIndex(where: { $0.id == value.id }) { workflows[index] = value }
+        else { workflows.append(value) }
+        persist()
+    }
+
+    @discardableResult
+    func create(name: String, steps: [WorkspaceWorkflowStep] = []) -> UUID {
+        let workflow = WorkspaceWorkflowDefinition(name: name.isEmpty ? "Untitled workflow" : name, steps: steps)
+        workflows.append(workflow)
+        persist()
+        return workflow.id
+    }
+
+    @discardableResult
+    func duplicate(_ id: UUID) -> UUID? {
+        guard let source = workflows.first(where: { $0.id == id }) else { return nil }
+        var copy = WorkspaceWorkflowDefinition(name: "(source.name) Copy", steps: source.steps)
+        copy.enabled = source.enabled
+        workflows.append(copy)
+        persist()
+        return copy.id
+    }
+
+    func remove(_ id: UUID) {
+        workflows.removeAll { $0.id == id }
+        persist()
+    }
+
+    func recordRun(_ id: UUID, state: WorkspaceGuestTaskState) {
+        guard let index = workflows.firstIndex(where: { $0.id == id }) else { return }
+        workflows[index].lastRunAt = .now
+        workflows[index].lastRunState = state
+        workflows[index].updatedAt = .now
+        persist()
+    }
+
+    private func persist() {
+        guard let data = try? JSONEncoder().encode(workflows) else { return }
+        UserDefaults.standard.set(data, forKey: defaultsKey)
+    }
+
+    private static let defaultGuestDiagnostics = WorkspaceWorkflowDefinition(
+        name: "Guest diagnostics",
+        steps: [
+            WorkspaceWorkflowStep(action: .captureGuestState, title: "Capture guest state"),
+            WorkspaceWorkflowStep(action: .refreshGuestLogs, title: "Refresh logs"),
+            WorkspaceWorkflowStep(action: .waitForBridge, title: "Wait for Frida bridge", parameters: ["timeout_seconds": "15"])
+        ]
+    )
+}
+
+// MARK: - Repository and installer inspection
+
+struct WorkspaceRepositoryAppInspection: Identifiable, Codable, Hashable {
+    let id: String
+    let name: String
+    let bundleIdentifier: String?
+    let version: String?
+    let category: String?
+    let downloadURL: URL?
+    let iconURL: URL?
+    let byteCount: UInt64?
+}
+
+struct WorkspaceRepositoryInspection: Codable, Hashable {
+    let sourceURL: URL?
+    let name: String
+    let apps: [WorkspaceRepositoryAppInspection]
+    let inspectedAt: Date
+}
+
+enum WorkspaceRepositoryInspectionError: LocalizedError {
+    case invalidJSON
+    case unsupportedFormat
+    case requestFailed
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidJSON: return "The repository did not contain valid JSON."
+        case .unsupportedFormat: return "The repository format is not recognized."
+        case .requestFailed: return "The repository could not be loaded."
+        }
+    }
+}
+
+struct WorkspaceRepositoryInspector {
+    static func inspect(data: Data, sourceURL: URL? = nil) throws -> WorkspaceRepositoryInspection {
+        guard let object = try? JSONSerialization.jsonObject(with: data) else { throw WorkspaceRepositoryInspectionError.invalidJSON }
+        let root: [String: Any]
+        let rawApps: [[String: Any]]
+        if let dictionary = object as? [String: Any] {
+            root = dictionary
+            if let apps = dictionary["apps"] as? [[String: Any]] { rawApps = apps }
+            else if let apps = dictionary["applications"] as? [[String: Any]] { rawApps = apps }
+            else { throw WorkspaceRepositoryInspectionError.unsupportedFormat }
+        } else if let apps = object as? [[String: Any]] {
+            root = [:]
+            rawApps = apps
+        } else {
+            throw WorkspaceRepositoryInspectionError.unsupportedFormat
+        }
+
+        let repositoryName = (root["name"] as? String) ?? sourceURL?.host ?? "Repository"
+        let values = rawApps.enumerated().compactMap { index, item -> WorkspaceRepositoryAppInspection? in
+            let name = (item["name"] as? String) ?? (item["title"] as? String) ?? ""
+            let identifier = (item["bundleIdentifier"] as? String) ?? (item["bundleID"] as? String) ?? (item["identifier"] as? String)
+            let download = (item["downloadURL"] as? String ?? item["download"] as? String).flatMap { URL(string: $0) }
+            let icon = (item["iconURL"] as? String ?? item["icon"] as? String).flatMap { URL(string: $0) }
+            let version = item["version"] as? String
+            let category = item["category"] as? String
+            let bytes = (item["size"] as? NSNumber)?.uint64Value
+            let id = identifier ?? download?.absoluteString ?? "(repositoryName)-(index)"
+            return WorkspaceRepositoryAppInspection(id: id, name: name, bundleIdentifier: identifier, version: version, category: category, downloadURL: download, iconURL: icon, byteCount: bytes)
+        }
+        return WorkspaceRepositoryInspection(sourceURL: sourceURL, name: repositoryName, apps: values, inspectedAt: .now)
+    }
+
+    static func inspect(url: URL) async throws -> WorkspaceRepositoryInspection {
+        var request = URLRequest(url: url)
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw WorkspaceRepositoryInspectionError.requestFailed }
+        return try inspect(data: data, sourceURL: url)
+    }
+}
+
+struct WorkspaceInstallerFileInspection: Identifiable, Hashable {
+    let id: String
+    let url: URL
+    let kind: String
+    let byteCount: UInt64
+    let modifiedAt: Date?
+    let canInspect: Bool
+}
+
+struct WorkspaceInstalledGuestSummary: Identifiable, Hashable {
+    let id: UUID
+    let name: String
+    let bundleIdentifier: String
+    let version: String
+    let state: VirtualAppStatus
+}
+
+@MainActor
+struct WorkspaceInstallerInspector {
+    static func files(in rootDirectory: URL) -> [WorkspaceInstallerFileInspection] {
+        let manager = FileManager.default
+        guard let urls = try? manager.contentsOfDirectory(at: rootDirectory, includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey], options: [.skipsHiddenFiles]) else { return [] }
+        return urls.compactMap { url in
+            guard let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey]) else { return nil }
+            let ext = url.pathExtension.lowercased()
+            let kind: String
+            switch ext {
+            case "ipa", "tipa", "zip": kind = "IPA archive"
+            case "p12", "pfx": kind = "Signing certificate"
+            case "mobileprovision", "provisionprofile": kind = "Provisioning profile"
+            default: kind = "File"
+            }
+            return WorkspaceInstallerFileInspection(id: url.path, url: url, kind: kind, byteCount: UInt64(values.fileSize ?? 0), modifiedAt: values.contentModificationDate, canInspect: ["ipa", "tipa", "zip", "p12", "pfx", "mobileprovision", "provisionprofile"].contains(ext))
+        }.sorted { $0.url.lastPathComponent.localizedCaseInsensitiveCompare($1.url.lastPathComponent) == .orderedAscending }
+    }
+
+    static func installedGuests(from store: WorkspaceStore) -> [WorkspaceInstalledGuestSummary] {
+        store.installedApps.map { app in
+            WorkspaceInstalledGuestSummary(id: app.id, name: app.displayName, bundleIdentifier: app.bundleIdentifier, version: app.version, state: app.status)
         }
     }
 }
