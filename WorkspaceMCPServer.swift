@@ -117,7 +117,6 @@ final class WorkspaceMCPServer: ObservableObject {
         ["name": "guest_objc_classes", "arguments": [], "read_only": true, "availability": "requires_guest_bridge", "dangerous": true],
         ["name": "guest_hook_method", "arguments": ["class", "selector"], "read_only": false, "availability": "requires_guest_bridge", "dangerous": true],
         ["name": "guest_memory_read", "arguments": ["address", "length"], "read_only": true, "availability": "requires_guest_bridge", "dangerous": true],
-        ["name": "guest_metrics", "arguments": [], "read_only": true, "availability": "requires_guest_bridge"],
         ["name": "repo_add", "arguments": ["url"], "read_only": false, "availability": "requires_installer_module"],
         ["name": "repo_refresh", "arguments": [], "read_only": false, "availability": "requires_installer_module"],
         ["name": "repo_search", "arguments": ["query"], "read_only": true, "availability": "requires_installer_module"],
@@ -283,8 +282,10 @@ final class WorkspaceMCPServer: ObservableObject {
 
         if path == "/action/status" && method == "GET" {
             let id = query["action_id"] ?? ""
-            let action = actionHistory.last { ($0["action_id"] as? String) == id }
-            return httpResponse(body: json(["action": action ?? NSNull()]))
+            if let action = actionHistory.last(where: { ($0["action_id"] as? String) == id }) {
+                return httpResponse(body: json(["action": action]))
+            }
+            return httpResponse(body: json(["action": NSNull()]))
         }
 
         if path == "/safety" && method == "GET" {
@@ -391,9 +392,10 @@ final class WorkspaceMCPServer: ObservableObject {
             let tool = "guest_\(name)"
             if ["guest_tap", "guest_swipe", "guest_type", "guest_key",
                 "guest_double_tap", "guest_long_press", "guest_scroll",
-                "guest_set_text", "guest_focus", "guest_keyboard",
-                "guest_clipboard", "guest_accessibility_snapshot",
-                "guest_runtime_info", "guest_metrics", "guest_filesystem"].contains(tool) {
+                "guest_set_text", "guest_focus", "guest_keyboard", "guest_key",
+                "guest_clipboard", "guest_clipboard_get", "guest_clipboard_set",
+                "guest_accessibility_snapshot", "guest_runtime_info", "guest_metrics",
+                "guest_filesystem"].contains(tool) {
                 let result = WorkspaceGuestControlCenter.shared.action(tool: tool, arguments: arguments)
                 return httpResponse(status: result.status, body: json(result.body))
             }
@@ -442,7 +444,10 @@ final class WorkspaceMCPServer: ObservableObject {
         }
         if tool == "action_status" || tool == "action_wait" {
             let id = (arguments["action_id"] as? String) ?? ""
-            return httpResponse(body: json(["action": actionHistory.last { ($0["action_id"] as? String) == id } ?? NSNull()]))
+            if let action = actionHistory.last(where: { ($0["action_id"] as? String) == id }) {
+                return httpResponse(body: json(["action": action]))
+            }
+            return httpResponse(body: json(["action": NSNull()]))
         }
         if tool == "safety_status" { return httpResponse(body: json(["read_only": readOnlyMode, "dangerous": dangerousMode])) }
         if tool == "safety_configure" {
@@ -477,7 +482,11 @@ final class WorkspaceMCPServer: ObservableObject {
                 recordAction(id: actionID, requestedTool: requested, tool: tool, status: "ok")
                 return response
 
-            case "guest_screenshot", "guest_tap", "guest_swipe", "guest_type", "guest_key":
+            case "guest_screenshot", "guest_tap", "guest_swipe", "guest_type", "guest_key",
+                 "guest_double_tap", "guest_long_press", "guest_scroll", "guest_set_text",
+                 "guest_focus", "guest_keyboard", "guest_clipboard", "guest_clipboard_get",
+                 "guest_clipboard_set", "guest_accessibility_snapshot", "guest_runtime_info",
+                 "guest_metrics", "guest_filesystem":
                 let response = guestControlResponse(tool: tool, arguments: arguments)
                 recordAction(id: actionID, requestedTool: requested, tool: tool, status: "queued")
                 return response

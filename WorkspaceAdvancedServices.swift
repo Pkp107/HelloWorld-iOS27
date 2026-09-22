@@ -916,7 +916,7 @@ final class WorkspaceGuestControlCenter {
             let id = WorkspaceGuestSessionStore.shared.submitControlCommand(kind: "key", snapshotID: snapshot.id, elementToken: elementToken, payload: ["key": key])
             return ("202 Accepted", queued(id, snapshot.id, "key"))
         case "guest_double_tap", "guest_long_press", "guest_scroll", "guest_set_text",
-             "guest_focus", "guest_keyboard", "guest_clipboard", "guest_accessibility_snapshot",
+             "guest_focus", "guest_keyboard", "guest_clipboard", "guest_clipboard_get", "guest_clipboard_set", "guest_accessibility_snapshot",
              "guest_runtime_info", "guest_metrics", "guest_filesystem":
             let kind = String(tool.dropFirst("guest_".count))
             var payload = arguments
@@ -1544,7 +1544,7 @@ struct WorkspaceGuestFilesystem {
         )
         return try urls.sorted { $0.lastPathComponent.localizedCaseInsensitiveCompare($1.lastPathComponent) == .orderedAscending }.map { url in
             let values = try url.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey])
-            let relative = relativePath(for: url)
+            let relative = self.relativePath(for: url)
             return WorkspaceGuestFileEntry(
                 id: relative,
                 relativePath: relative,
