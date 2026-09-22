@@ -328,6 +328,8 @@ struct RuntimeWindow: View {
             WorkspaceFileManagerView(store: store)
         case .devStudio:
             WorkspaceDeveloperToolsView(store: store, initialTab: .studio)
+        case .ai:
+            WorkspaceAIChatView()
         case .github:
             WorkspaceDeveloperToolsView(store: store, initialTab: .github)
         case .inspector:

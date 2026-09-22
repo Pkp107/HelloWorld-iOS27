@@ -18,13 +18,14 @@ enum SystemAppKind: String, Codable, CaseIterable, Hashable {
     case liveContainerSettings
     case fileManager
     case devStudio
+    case ai
     case github
     case inspector
     case network
     case remoteDesktop
 
     static var allCases: [SystemAppKind] {
-        [.helloWorld, .installer, .fileManager, .devStudio, .remoteDesktop, .settings]
+        [.helloWorld, .installer, .fileManager, .devStudio, .ai, .remoteDesktop, .settings]
     }
 
     init(from decoder: Decoder) throws {
@@ -59,6 +60,7 @@ enum SystemAppKind: String, Codable, CaseIterable, Hashable {
         case .liveContainerSettings: return "LiveContainer Settings"
         case .fileManager: return "File Manager"
         case .devStudio: return "Developer"
+        case .ai: return "AI"
         case .github: return "GitHub"
         case .inspector: return "Inspector"
         case .network: return "Network"
@@ -77,6 +79,7 @@ enum SystemAppKind: String, Codable, CaseIterable, Hashable {
         case .liveContainerSettings: return "bolt.circle.fill"
         case .fileManager: return "folder.fill"
         case .devStudio: return "wrench.and.screwdriver.fill"
+        case .ai: return "brain.head.profile"
         case .github: return "arrow.triangle.branch"
         case .inspector: return "ladybug.fill"
         case .network: return "network"
@@ -95,6 +98,7 @@ enum SystemAppKind: String, Codable, CaseIterable, Hashable {
         case .liveContainerSettings: return "indigo"
         case .fileManager: return "teal"
         case .devStudio: return "blue"
+        case .ai: return "purple"
         case .github: return "purple"
         case .inspector: return "orange"
         case .network: return "green"
@@ -107,6 +111,7 @@ enum SystemAppKind: String, Codable, CaseIterable, Hashable {
         case .helloWorld: return "System"
         case .appLibrary, .settings, .ipaSigner, .installer, .liveContainer, .liveContainerSettings, .fileManager: return "Utilities"
         case .devStudio, .github, .inspector, .network, .remoteDesktop: return "Developer"
+        case .ai: return "Workspace"
         }
     }
 }
@@ -400,6 +405,7 @@ final class WorkspaceStore: ObservableObject {
         .liveContainer: UUID(uuidString: "A7A82D56-1F2C-4B27-9FA9-000000000002")!,
         .fileManager: UUID(uuidString: "A7A82D56-1F2C-4B27-9FA9-000000000007")!,
         .devStudio: UUID(uuidString: "A7A82D56-1F2C-4B27-9FA9-000000000008")!,
+        .ai: UUID(uuidString: "A7A82D56-1F2C-4B27-9FA9-000000000013")!,
         .github: UUID(uuidString: "A7A82D56-1F2C-4B27-9FA9-000000000009")!,
         .inspector: UUID(uuidString: "A7A82D56-1F2C-4B27-9FA9-000000000010")!,
         .network: UUID(uuidString: "A7A82D56-1F2C-4B27-9FA9-000000000011")!,
@@ -497,6 +503,26 @@ final class WorkspaceStore: ObservableObject {
         return (enumerator?.compactMap { item -> URL? in
             guard let url = item as? URL,
                   (try? url.resourceValues(forKeys: keys).isDirectory) != true else { return nil }
+            return url
+        } ?? []).sorted { $0.path.localizedCaseInsensitiveCompare($1.path) == .orderedAscending }
+    }
+
+    /// IPA packages copied through Installer are kept in the app-support
+    /// import store. Expose them to developer tools as guest candidates too;
+    /// otherwise Inspector only sees files copied into Documents and appears
+    /// empty after a normal Installer import.
+    func installerIPAFiles() -> [URL] {
+        guard fileManager.fileExists(atPath: importsDirectory.path) else { return [] }
+        let keys: Set<URLResourceKey> = [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey]
+        let enumerator = fileManager.enumerator(
+            at: importsDirectory,
+            includingPropertiesForKeys: Array(keys),
+            options: [.skipsHiddenFiles]
+        )
+        return (enumerator?.compactMap { item -> URL? in
+            guard let url = item as? URL,
+                  (try? url.resourceValues(forKeys: keys).isDirectory) != true,
+                  ["ipa", "tipa", "zip"].contains(url.pathExtension.lowercased()) else { return nil }
             return url
         } ?? []).sorted { $0.path.localizedCaseInsensitiveCompare($1.path) == .orderedAscending }
     }

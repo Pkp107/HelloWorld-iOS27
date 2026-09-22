@@ -1197,6 +1197,7 @@ struct WorkspaceInspectorView: View {
     @State private var note = ""
     @State private var selectedIPA: URL?
     @State private var isShowingIPAs = false
+    @State private var isShowingIPAImporter = false
 
     init(store: WorkspaceStore) {
         _workspace = ObservedObject(wrappedValue: store)
@@ -1204,7 +1205,12 @@ struct WorkspaceInspectorView: View {
     }
 
     private var ipaFiles: [URL] {
-        workspace.workspaceFiles().filter { ["ipa", "tipa"].contains($0.pathExtension.lowercased()) }
+        let candidates = workspace.workspaceFiles() + workspace.installerIPAFiles()
+        var seen = Set<String>()
+        return candidates
+            .filter { ["ipa", "tipa", "zip"].contains($0.pathExtension.lowercased()) }
+            .filter { seen.insert($0.standardizedFileURL.path).inserted }
+            .sorted { $0.lastPathComponent.localizedCaseInsensitiveCompare($1.lastPathComponent) == .orderedAscending }
     }
 
     var body: some View {
@@ -1228,6 +1234,9 @@ struct WorkspaceInspectorView: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                     Button("Choose guest IPA") { isShowingIPAs = true }
+                    Text("Choose an IPA already in Workspace Files or Installer imports. You can also copy a new package from Files.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     if let selectedIPA {
                         LabeledContent("Selected", value: selectedIPA.lastPathComponent)
                         Button("Create preparation plan") { diagnostics.prepareFridaGadget(for: selectedIPA) }
@@ -1266,7 +1275,27 @@ struct WorkspaceInspectorView: View {
                 ForEach(ipaFiles, id: \.path) { ipa in
                     Button(ipa.lastPathComponent) { selectedIPA = ipa }
                 }
+                Button("Import guest IPA from Files") { isShowingIPAImporter = true }
                 Button("Cancel", role: .cancel) {}
+            }
+            .fileImporter(
+                isPresented: $isShowingIPAImporter,
+                allowedContentTypes: [.item],
+                allowsMultipleSelection: false
+            ) { result in
+                switch result {
+                case .success(let urls):
+                    guard let url = urls.first else { return }
+                    guard ["ipa", "tipa", "zip"].contains(url.pathExtension.lowercased()) else {
+                        diagnostics.errorMessage = "Choose an IPA, .tipa, or ZIP package."
+                        return
+                    }
+                    guard let copied = workspace.copyToWorkspaceFiles(from: url) else { return }
+                    selectedIPA = copied
+                    diagnostics.append("Copied guest IPA \(copied.lastPathComponent) into Workspace Files.")
+                case .failure(let error):
+                    diagnostics.errorMessage = "Could not import guest IPA: \(error.localizedDescription)"
+                }
             }
             .alert("Inspector", isPresented: Binding(
                 get: { diagnostics.errorMessage != nil },

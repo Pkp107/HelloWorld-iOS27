@@ -3,6 +3,7 @@ import Foundation
 import Network
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 // MARK: - Advanced services coordinator
 
@@ -21,15 +22,9 @@ struct WorkspaceAdvancedServicesView: View {
             WorkspacePiSSHView()
                 .tabItem { Label("Pi / SSH", systemImage: "terminal.fill") }
                 .tag(WorkspaceAdvancedServiceTab.pi)
-            WorkspaceLocalAIView()
-                .tabItem { Label("Local AI", systemImage: "sparkles") }
-                .tag(WorkspaceAdvancedServiceTab.ai)
             WorkspaceGitHubAdvancedView()
                 .tabItem { Label("GitHub", systemImage: "arrow.triangle.branch") }
                 .tag(WorkspaceAdvancedServiceTab.github)
-            WorkspaceModuleInstallView()
-                .tabItem { Label("Modules", systemImage: "shippingbox.fill") }
-                .tag(WorkspaceAdvancedServiceTab.modules)
             WorkspaceFridaMCPTerminalView()
                 .tabItem { Label("Guest terminal", systemImage: "rectangle.split.2x1") }
                 .tag(WorkspaceAdvancedServiceTab.frida)
@@ -39,7 +34,7 @@ struct WorkspaceAdvancedServicesView: View {
 }
 
 enum WorkspaceAdvancedServiceTab: Hashable {
-    case server, pi, ai, github, modules, frida
+    case server, pi, github, frida
 }
 
 // MARK: - Localhost project server
@@ -236,102 +231,315 @@ struct WorkspacePiSSHView: View {
     }
 }
 
-// MARK: - Local AI model registry
+// MARK: - Workspace AI app
 
+/// A model entry describes the local file the user imported. Workspace does not
+/// mark a model as ready until a model file is present in its private Models
+/// directory, and it never pretends that a missing inference runtime is active.
 struct WorkspaceAIModelDescriptor: Identifiable, Codable, Hashable {
-    let id: UUID
-    var name: String
-    var provider: String
-    var size: String
-    var downloaded: Bool
-    var supportsCode: Bool
+    let id: String
+    let name: String
+    let provider: String
+    let size: String
+    let summary: String
+    var modelFileName: String?
 
-    init(id: UUID = UUID(), name: String, provider: String, size: String, downloaded: Bool = false, supportsCode: Bool = true) {
-        self.id = id
-        self.name = name
-        self.provider = provider
-        self.size = size
-        self.downloaded = downloaded
-        self.supportsCode = supportsCode
-    }
+    var isInstalled: Bool { modelFileName != nil }
+}
+
+struct WorkspaceAIChatMessage: Identifiable, Codable, Hashable {
+    enum Role: String, Codable { case user, assistant }
+    let id: UUID
+    let role: Role
+    let text: String
+    let createdAt: Date
 }
 
 @MainActor
-final class WorkspaceLocalAIModel: ObservableObject {
+final class WorkspaceAIChatModel: ObservableObject {
     @Published var models: [WorkspaceAIModelDescriptor]
-    @Published var selectedModelID: UUID?
-    @Published private(set) var status = "No model is running"
+    @Published var selectedModelID: String
+    @Published var messages: [WorkspaceAIChatMessage]
+    @Published var draft = ""
+    @Published private(set) var status = "Choose a model to begin"
+    @Published private(set) var isSending = false
 
-    private let defaultsKey = "workspace.localAI.models.v1"
-    private let selectionKey = "workspace.localAI.selectedModel.v1"
+    private let defaultsKey = "workspace.ai.chat.v2"
+    private let modelDirectory: URL
 
     init() {
-        if let data = UserDefaults.standard.data(forKey: defaultsKey),
-           let values = try? JSONDecoder().decode([WorkspaceAIModelDescriptor].self, from: data) {
-            models = values
-        } else {
-            models = [
-                WorkspaceAIModelDescriptor(name: "SmolLM Code", provider: "Hugging Face", size: "~1 GB"),
-                WorkspaceAIModelDescriptor(name: "Phi-3 Mini", provider: "Microsoft", size: "~2.4 GB"),
-                WorkspaceAIModelDescriptor(name: "Pi Code Runner", provider: "Raspberry Pi", size: "Remote", downloaded: true)
-            ]
-        }
-        selectedModelID = UserDefaults.standard.string(forKey: selectionKey).flatMap(UUID.init(uuidString:))
-    }
+        let applicationSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        modelDirectory = applicationSupport.appendingPathComponent("HelloOS/Models", isDirectory: true)
+        try? FileManager.default.createDirectory(at: modelDirectory, withIntermediateDirectories: true)
 
-    func toggle(_ model: WorkspaceAIModelDescriptor) {
-        guard let index = models.firstIndex(where: { $0.id == model.id }) else { return }
-        models[index].downloaded.toggle()
-        if models[index].downloaded { status = "\(models[index].name) is available to a future inference runtime." }
+        if let data = UserDefaults.standard.data(forKey: defaultsKey),
+           let saved = try? JSONDecoder().decode(Persisted.self, from: data) {
+            models = Self.reconcile(saved.models, modelDirectory: modelDirectory)
+            selectedModelID = saved.selectedModelID
+            messages = saved.messages
+        } else {
+            models = Self.defaultModels
+            selectedModelID = Self.defaultModels[0].id
+            messages = []
+        }
+        normalizeSelection()
         persist()
     }
 
+    var selectedModel: WorkspaceAIModelDescriptor? {
+        models.first { $0.id == selectedModelID }
+    }
+
+    var hasInstalledModel: Bool { models.contains(where: { $0.isInstalled }) }
+
     func select(_ model: WorkspaceAIModelDescriptor) {
         selectedModelID = model.id
-        UserDefaults.standard.set(model.id.uuidString, forKey: selectionKey)
-        status = model.downloaded ? "Selected \(model.name)" : "Download \(model.name) before running it"
+        status = model.isInstalled
+            ? "\(model.name) is selected"
+            : "Import a \(model.name) model file to use it"
+        persist()
+    }
+
+    func importModel(from sourceURL: URL) -> Bool {
+        let hasAccess = sourceURL.startAccessingSecurityScopedResource()
+        defer { if hasAccess { sourceURL.stopAccessingSecurityScopedResource() } }
+        guard let model = selectedModel else {
+            status = "Choose a model first"
+            return false
+        }
+        do {
+            let ext = sourceURL.pathExtension.isEmpty ? "bin" : sourceURL.pathExtension
+            let destination = modelDirectory.appendingPathComponent("\(model.id).\(ext)", isDirectory: false)
+            if FileManager.default.fileExists(atPath: destination.path) {
+                try FileManager.default.removeItem(at: destination)
+            }
+            try FileManager.default.copyItem(at: sourceURL, to: destination)
+            guard let index = models.firstIndex(where: { $0.id == model.id }) else { return false }
+            models[index].modelFileName = destination.lastPathComponent
+            status = "\(model.name) is installed. An inference runtime is still required to generate replies."
+            persist()
+            return true
+        } catch {
+            status = "Could not import model: \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    func remove(_ model: WorkspaceAIModelDescriptor) {
+        if let fileName = model.modelFileName {
+            try? FileManager.default.removeItem(at: modelDirectory.appendingPathComponent(fileName, isDirectory: false))
+        }
+        guard let index = models.firstIndex(where: { $0.id == model.id }) else { return }
+        models[index].modelFileName = nil
+        status = "\(model.name) removed"
+        persist()
+    }
+
+    func send() {
+        let prompt = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty, !isSending else { return }
+        guard let model = selectedModel else {
+            status = "Choose a model first"
+            return
+        }
+        guard model.isInstalled else {
+            status = "Import a \(model.name) model file first"
+            return
+        }
+
+        messages.append(WorkspaceAIChatMessage(id: UUID(), role: .user, text: prompt, createdAt: .now))
+        draft = ""
+        isSending = true
+        status = "Preparing \(model.name)…"
+        persist()
+
+        // The UI is ready for an embedded llama.cpp/MLX bridge. Do not return
+        // fabricated model output while no inference engine is linked.
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(220))
+            let reply = "\(model.name) is installed, but this build has no embedded inference runtime yet. Add a compatible on-device backend to generate a response from the model file."
+            messages.append(WorkspaceAIChatMessage(id: UUID(), role: .assistant, text: reply, createdAt: .now))
+            isSending = false
+            status = "Model ready; inference runtime unavailable"
+            persist()
+        }
+    }
+
+    func clearChat() {
+        messages.removeAll()
+        status = selectedModel.map { $0.isInstalled ? "Ready to chat with \($0.name)" : "Import a \($0.name) model file to use it" } ?? "Choose a model to begin"
+        persist()
+    }
+
+    private func normalizeSelection() {
+        guard models.contains(where: { $0.id == selectedModelID }) else {
+            selectedModelID = models.first?.id ?? "qwen35-4b"
+        }
     }
 
     private func persist() {
-        if let data = try? JSONEncoder().encode(models) { UserDefaults.standard.set(data, forKey: defaultsKey) }
+        let value = Persisted(models: models, selectedModelID: selectedModelID, messages: messages)
+        if let data = try? JSONEncoder().encode(value) { UserDefaults.standard.set(data, forKey: defaultsKey) }
+    }
+
+    private struct Persisted: Codable {
+        var models: [WorkspaceAIModelDescriptor]
+        var selectedModelID: String
+        var messages: [WorkspaceAIChatMessage]
+    }
+
+    private static let defaultModels: [WorkspaceAIModelDescriptor] = [
+        WorkspaceAIModelDescriptor(id: "qwen35-4b", name: "Qwen 3.5 4B", provider: "Qwen", size: "~2.5 GB", summary: "General chat and coding model", modelFileName: nil),
+        WorkspaceAIModelDescriptor(id: "phi4-mini", name: "Phi-4 Mini", provider: "Microsoft", size: "~2.5 GB", summary: "Compact reasoning and code model", modelFileName: nil),
+        WorkspaceAIModelDescriptor(id: "llama32-3b", name: "Llama 3.2 3B", provider: "Meta", size: "~2 GB", summary: "General-purpose local assistant", modelFileName: nil)
+    ]
+
+    private static func reconcile(_ saved: [WorkspaceAIModelDescriptor], modelDirectory: URL) -> [WorkspaceAIModelDescriptor] {
+        defaultModels.map { base in
+            guard let old = saved.first(where: { $0.id == base.id }),
+                  let fileName = old.modelFileName,
+                  FileManager.default.fileExists(atPath: modelDirectory.appendingPathComponent(fileName).path) else { return base }
+            var value = base
+            value.modelFileName = fileName
+            return value
+        }
     }
 }
 
-struct WorkspaceLocalAIView: View {
-    @StateObject private var model = WorkspaceLocalAIModel()
+struct WorkspaceAIChatView: View {
+    @StateObject private var model = WorkspaceAIChatModel()
+    @State private var showingModelImporter = false
+    @State private var showingModelSheet = false
 
     var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                if model.messages.isEmpty {
+                    emptyState
+                } else {
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 12) {
+                                ForEach(model.messages) { message in
+                                    WorkspaceAIMessageBubble(message: message)
+                                        .id(message.id)
+                                }
+                            }
+                            .padding(16)
+                        }
+                        .onChange(of: model.messages.count) { _, _ in
+                            if let last = model.messages.last { withAnimation { proxy.scrollTo(last.id, anchor: .bottom) } }
+                        }
+                    }
+                }
+
+                Divider()
+                HStack(alignment: .bottom, spacing: 10) {
+                    TextField("Ask your local model…", text: $model.draft, axis: .vertical)
+                        .lineLimit(1...5)
+                        .textFieldStyle(.roundedBorder)
+                    Button { model.send() } label: {
+                        Image(systemName: model.isSending ? "hourglass" : "arrow.up.circle.fill")
+                            .font(.title2)
+                    }
+                    .disabled(model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.isSending)
+                    .accessibilityLabel("Send message")
+                }
+                .padding(12)
+                .background(.bar)
+            }
+            .navigationTitle("AI")
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { showingModelSheet = true } label: {
+                        Label(model.selectedModel?.name ?? "Choose model", systemImage: "brain.head.profile")
+                            .lineLimit(1)
+                    }
+                    .accessibilityLabel("Choose AI model")
+                }
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button { model.clearChat() } label: { Image(systemName: "trash") }
+                        .disabled(model.messages.isEmpty)
+                        .accessibilityLabel("Clear chat")
+                }
+            }
+            .sheet(isPresented: $showingModelSheet) { modelSheet }
+            .fileImporter(isPresented: $showingModelImporter, allowedContentTypes: [.data, .item], allowsMultipleSelection: false) { result in
+                if case .success(let urls) = result, let url = urls.first { _ = model.importModel(from: url) }
+            }
+        }
+    }
+
+    private var emptyState: some View {
+        ContentUnavailableView {
+            Label("Private AI workspace", systemImage: "brain.head.profile")
+        } description: {
+            Text("Choose a model, import its model file, and start a local chat. Workspace keeps model files in its private storage.")
+        } actions: {
+            Button("Choose model") { showingModelSheet = true }
+                .buttonStyle(.borderedProminent)
+            Text(model.status).font(.footnote).foregroundStyle(.secondary)
+        }
+    }
+
+    private var modelSheet: some View {
         NavigationStack {
             List {
                 Section("Models") {
                     ForEach(model.models) { item in
-                        HStack(spacing: 12) {
-                            Image(systemName: item.downloaded ? "checkmark.circle.fill" : "arrow.down.circle")
-                                .foregroundStyle(item.downloaded ? .green : .secondary)
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(item.name).font(.headline)
-                                Text("\(item.provider) · \(item.size)").font(.caption).foregroundStyle(.secondary)
+                        Button { model.select(item); showingModelSheet = false } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: item.isInstalled ? "checkmark.circle.fill" : "circle")
+                                    .foregroundStyle(item.isInstalled ? .green : .secondary)
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(item.name).font(.headline)
+                                    Text("\(item.provider) · \(item.size)").font(.caption).foregroundStyle(.secondary)
+                                    Text(item.summary).font(.caption2).foregroundStyle(.tertiary)
+                                }
+                                Spacer()
+                                if item.id == model.selectedModelID { Image(systemName: "checkmark").foregroundStyle(.tint) }
                             }
-                            Spacer()
-                            Button(item.downloaded ? "Remove" : "Add") { model.toggle(item) }
-                                .buttonStyle(.borderless)
                         }
-                        .contentShape(Rectangle())
-                        .onTapGesture { model.select(item) }
+                        .buttonStyle(.plain)
+                        .contextMenu {
+                            if item.isInstalled { Button("Remove model", role: .destructive) { model.remove(item) } }
+                        }
                     }
                 }
-                Section {
+                Section("Selected model") {
+                    Button { showingModelSheet = false; showingModelImporter = true } label: {
+                        Label(model.selectedModel?.isInstalled == true ? "Replace model file" : "Import model file", systemImage: "square.and.arrow.down")
+                    }
                     Text(model.status).font(.footnote).foregroundStyle(.secondary)
-                    Label("Model files are optional and are not bundled with the app. A compatible inference runtime or remote Pi service is still required.", systemImage: "info.circle")
+                    Text("Model weights are not bundled in the IPA. Import a compatible file such as GGUF, then connect an embedded inference backend before expecting generated replies.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
             }
-            .navigationTitle("Local AI")
+            .navigationTitle("AI models")
+            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { showingModelSheet = false } } }
         }
     }
 }
 
+private struct WorkspaceAIMessageBubble: View {
+    let message: WorkspaceAIChatMessage
+
+    var body: some View {
+        HStack {
+            if message.role == .assistant { bubble; Spacer(minLength: 42) } else { Spacer(minLength: 42); bubble }
+        }
+    }
+
+    private var bubble: some View {
+        Text(message.text)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .foregroundStyle(message.role == .user ? .white : .primary)
+            .background(message.role == .user ? Color.accentColor : Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .textSelection(.enabled)
+    }
+}
 // MARK: - GitHub artifacts / PRs / issues / releases
 
 struct WorkspaceGitHubAdvancedItem: Identifiable, Hashable {
@@ -443,80 +651,6 @@ struct WorkspaceGitHubAdvancedView: View {
                 }
             }
             .navigationTitle("GitHub details")
-        }
-    }
-}
-
-// MARK: - Optional module download/install status
-
-struct WorkspaceModuleInstallRecord: Identifiable, Codable, Hashable {
-    let id: String
-    var state: String
-    var progress: Double
-    var note: String
-}
-
-@MainActor
-final class WorkspaceModuleInstallModel: ObservableObject {
-    @Published var records: [WorkspaceModuleInstallRecord]
-    private let defaultsKey = "workspace.moduleInstallRecords.v1"
-
-    init() {
-        if let data = UserDefaults.standard.data(forKey: defaultsKey),
-           let values = try? JSONDecoder().decode([WorkspaceModuleInstallRecord].self, from: data) {
-            records = values
-        } else {
-            records = []
-        }
-    }
-
-    func install(_ module: WorkspaceModuleID) {
-        if let index = records.firstIndex(where: { $0.id == module.rawValue }) {
-            records[index].state = "Queued"
-            records[index].note = "Waiting for the module runtime package."
-        } else {
-            records.append(WorkspaceModuleInstallRecord(id: module.rawValue, state: "Queued", progress: 0, note: "Waiting for the module runtime package."))
-        }
-        persist()
-    }
-
-    private func persist() {
-        if let data = try? JSONEncoder().encode(records) { UserDefaults.standard.set(data, forKey: defaultsKey) }
-    }
-}
-
-struct WorkspaceModuleInstallView: View {
-    @StateObject private var model = WorkspaceModuleInstallModel()
-
-    var body: some View {
-        NavigationStack {
-            List {
-                ForEach(WorkspaceModuleID.allCases) { module in
-                    let record = model.records.first(where: { $0.id == module.rawValue })
-                    HStack {
-                        Image(systemName: module.symbol)
-                            .frame(width: 26)
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(module.title)
-                            Text(record?.note ?? "\(module.storageEstimate) · \(module.executionNote)")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Button(record == nil ? "Install" : (record?.state ?? "Queued")) { model.install(module) }
-                            .buttonStyle(.borderless)
-                    }
-                }
-            }
-            .navigationTitle("Module packages")
-            .safeAreaInset(edge: .bottom) {
-                Text("Module downloads are staged here. Runtime binaries must come from a compatible signed package or remote builder.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal)
-                    .padding(.vertical, 8)
-                    .background(.bar)
-            }
         }
     }
 }
@@ -1843,3 +1977,4 @@ struct WorkspaceInstallerInspector {
         }
     }
 }
+
