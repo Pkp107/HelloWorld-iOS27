@@ -713,7 +713,7 @@ struct WorkspaceFileManagerView: View {
     @State private var showingImporter = false
     @StateObject private var assetStore = SigningAssetStore()
 
-    private let folders = ["Incoming", "IPAs", "Certificates", "Provisioning Profiles", "Downloads", "Signed"]
+    private let folders = ["Incoming", "IPAs", "AI Models", "Certificates", "Provisioning Profiles", "Downloads", "Signed"]
 
     var body: some View {
         NavigationStack {
@@ -761,6 +761,20 @@ struct WorkspaceFileManagerView: View {
                 case .success(let urls): urls.forEach { _ = store.copyToWorkspaceFiles(from: $0) }
                 case .failure(let error): store.importError = error.localizedDescription
                 }
+            }
+            // A file can also be dragged from Files into Workspace. This is
+            // the reliable import path on devices where the document picker
+            // presents a provider but never returns a usable URL.
+            .onDrop(of: [UTType.fileURL.identifier, UTType.item.identifier], isTargeted: nil) { providers in
+                guard let provider = providers.first else { return false }
+                provider.loadFileRepresentation(forTypeIdentifier: UTType.item.identifier) { url, error in
+                    if let url {
+                        Task { @MainActor in _ = store.copyToWorkspaceFiles(from: url) }
+                    } else if let error {
+                        Task { @MainActor in store.importError = error.localizedDescription }
+                    }
+                }
+                return true
             }
         }
     }

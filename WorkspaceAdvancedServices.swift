@@ -316,8 +316,11 @@ final class WorkspaceAIChatModel: ObservableObject {
         for root in roots {
             guard let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey], options: [.skipsHiddenFiles]) else { continue }
             for case let url as URL in enumerator {
-                guard (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) != true,
-                      allowed.contains(url.pathExtension.lowercased()) else { continue }
+                let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+                // Core ML packages are directories; all other supported model
+                // formats are regular files.
+                guard allowed.contains(url.pathExtension.lowercased()),
+                      !isDirectory || url.pathExtension.lowercased() == "mlpackage" else { continue }
                 results.append(url)
             }
         }
