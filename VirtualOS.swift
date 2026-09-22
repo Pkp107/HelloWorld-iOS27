@@ -484,7 +484,7 @@ final class WorkspaceStore: ObservableObject {
                 .appendingPathComponent("Workspace Files", isDirectory: true)
         }
 #endif
-        fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        return fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Workspace Files", isDirectory: true)
     }
 
