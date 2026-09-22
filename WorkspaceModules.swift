@@ -178,18 +178,19 @@ enum WorkspaceModuleID: String, CaseIterable, Codable, Hashable, Identifiable {
 final class WorkspaceModuleStore: ObservableObject {
     @Published private(set) var enabled: Set<WorkspaceModuleID>
 
-    private let defaultsKey = "workspace.enabledModules.v1"
+    private let defaultsKey = "workspace.enabledModules.v2"
 
     init() {
+        // Every module ships in the IPA. The store remains useful for future
+        // feature flags, but a fresh install must expose the complete surface.
+        let allModules = Set(WorkspaceModuleID.allCases)
         if let data = UserDefaults.standard.data(forKey: defaultsKey),
            let values = try? JSONDecoder().decode(Set<WorkspaceModuleID>.self, from: data) {
-            enabled = values
+            enabled = values.union(allModules)
         } else {
-            enabled = Set([
-                .miniXcode, .githubActions, .gitHubManager,
-                .fileManager, .installerStore, .liveContainer, .jitSetup
-            ])
+            enabled = allModules
         }
+        persist()
     }
 
     var modules: [WorkspaceModuleID] {
