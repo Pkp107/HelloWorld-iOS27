@@ -372,7 +372,7 @@ final class WorkspaceAIChatModel: ObservableObject {
     }
 
     private func normalizeSelection() {
-        guard models.contains(where: { $0.id == selectedModelID }) else {
+        if !models.contains(where: { $0.id == selectedModelID }) {
             selectedModelID = models.first?.id ?? "qwen35-4b"
         }
     }
