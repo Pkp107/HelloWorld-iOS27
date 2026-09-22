@@ -29,11 +29,13 @@ struct WorkspaceShareRootView: View {
 private enum SigningShareKind: String {
     case certificate
     case provisioningProfile
+    case aiModel
 
     init?(fileURL: URL) {
         switch fileURL.pathExtension.lowercased() {
         case "p12", "pfx": self = .certificate
         case "mobileprovision", "provisionprofile": self = .provisioningProfile
+        case "gguf", "ggml", "safetensors", "mlmodel", "mlpackage", "onnx", "bin", "model": self = .aiModel
         default: return nil
         }
     }
@@ -42,6 +44,7 @@ private enum SigningShareKind: String {
         switch self {
         case .certificate: return "Certificate"
         case .provisioningProfile: return "Provisioning profile"
+        case .aiModel: return "AI model"
         }
     }
 }
@@ -58,7 +61,9 @@ private struct WorkspaceSigningAssetShareView: View {
             VStack(alignment: .leading, spacing: 18) {
                 Label("Add to Workspace", systemImage: "square.and.arrow.down")
                     .font(.title2.weight(.semibold))
-                Text("Save this \(kind.title.lowercased()) for IPA Signer and certificate-based JIT.")
+            Text(kind == .aiModel
+                 ? "Save this model to Workspace Files so the AI app can use it without the Files picker."
+                 : "Save this \(kind.title.lowercased()) for IPA Signer and certificate-based JIT.")
                     .foregroundStyle(.secondary)
                 LabeledContent("File", value: fileURL.lastPathComponent)
                     .lineLimit(2)
@@ -99,9 +104,17 @@ private struct WorkspaceSigningAssetShareView: View {
             guard let appGroupPath = LCSharedUtils.appGroupPath() else {
                 throw WorkspaceShareError("Workspace shared storage is unavailable.")
             }
-            let directory = appGroupPath
-                .appendingPathComponent("Workspace-iOS27/Signing/Incoming", isDirectory: true)
-                .appendingPathComponent(kind.rawValue, isDirectory: true)
+            let directory: URL
+            if kind == .aiModel {
+                // Keep shared imports under the same root that the main app's
+                // file manager exposes. This makes Share -> Workspace files
+                // immediately selectable by the AI app.
+                directory = appGroupPath.appendingPathComponent("Workspace-iOS27/Workspace Files/AI Models", isDirectory: true)
+            } else {
+                directory = appGroupPath
+                    .appendingPathComponent("Workspace-iOS27/Signing/Incoming", isDirectory: true)
+                    .appendingPathComponent(kind.rawValue, isDirectory: true)
+            }
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             let destination = directory.appendingPathComponent(fileURL.lastPathComponent, isDirectory: false)
             try? FileManager.default.removeItem(at: destination)

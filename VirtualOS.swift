@@ -473,12 +473,23 @@ final class WorkspaceStore: ObservableObject {
     /// certificates, and provisioning profiles here from Files, then select
     /// them without reopening the provider picker.
     var workspaceFilesDirectory: URL {
+#if LIVE_CONTAINER_NATIVE
+        // The share extension and the LiveContainer host use the same app
+        // group. Keeping Workspace Files there makes Share -> Workspace
+        // imports (including large model weights) immediately visible to the
+        // main shell without relying on UIDocumentPicker security scopes.
+        if let appGroupPath = LCSharedUtils.appGroupPath() {
+            return appGroupPath
+                .appendingPathComponent("Workspace-iOS27", isDirectory: true)
+                .appendingPathComponent("Workspace Files", isDirectory: true)
+        }
+#endif
         fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Workspace Files", isDirectory: true)
     }
 
     private var workspaceFileFolders: [String] {
-        ["Incoming", "IPAs", "Certificates", "Provisioning Profiles", "Downloads", "Signed"]
+        ["Incoming", "IPAs", "AI Models", "Certificates", "Provisioning Profiles", "Downloads", "Signed"]
     }
 
     func workspaceFolderDirectory(named name: String) -> URL {
@@ -538,6 +549,10 @@ final class WorkspaceStore: ObservableObject {
             let folder: String
             switch ext {
             case "ipa", "tipa", "zip": folder = "IPAs"
+            // Model files are copied into app-owned storage so the AI app can
+            // consume them without relying on UIDocumentPicker callbacks.
+            // This also gives Share Sheet imports a stable, visible location.
+            case "gguf", "ggml", "safetensors", "mlmodel", "mlpackage", "onnx", "bin": folder = "AI Models"
             case "p12", "pfx": folder = "Certificates"
             case "mobileprovision", "provisionprofile": folder = "Provisioning Profiles"
             default: folder = "Incoming"

@@ -266,11 +266,13 @@ final class WorkspaceAIChatModel: ObservableObject {
 
     private let defaultsKey = "workspace.ai.chat.v2"
     private let modelDirectory: URL
+    private let fileManager = FileManager.default
 
-    init() {
-        let applicationSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        modelDirectory = applicationSupport.appendingPathComponent("HelloOS/Models", isDirectory: true)
-        try? FileManager.default.createDirectory(at: modelDirectory, withIntermediateDirectories: true)
+    init(store: WorkspaceStore) {
+        // Shared Workspace Files is also writable by the share extension.
+        // Model imports therefore do not depend on UIDocumentPicker.
+        modelDirectory = store.workspaceFolderDirectory(named: "AI Models")
+        try? fileManager.createDirectory(at: modelDirectory, withIntermediateDirectories: true)
 
         if let data = UserDefaults.standard.data(forKey: defaultsKey),
            let saved = try? JSONDecoder().decode(Persisted.self, from: data) {
@@ -292,6 +294,38 @@ final class WorkspaceAIChatModel: ObservableObject {
 
     var hasInstalledModel: Bool { models.contains(where: { $0.isInstalled }) }
 
+    /// Returns model files that were copied into Workspace Files or shared to
+    /// the app's group inbox. This is the reliable path on devices where the
+    /// Files provider picker does not return a usable security-scoped URL.
+    func workspaceModelFiles() -> [URL] {
+        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        var roots: [URL] = [
+            documents.appendingPathComponent("Workspace Files/AI Models", isDirectory: true),
+            documents.appendingPathComponent("Workspace Files/Incoming", isDirectory: true)
+        ]
+#if LIVE_CONTAINER_NATIVE
+        if let shared = LCSharedUtils.appGroupPath() {
+            roots.append(shared.appendingPathComponent("Workspace-iOS27/Workspace Files/AI Models", isDirectory: true))
+            // Read the old inbox path as a migration aid for models shared by
+            // an earlier build.
+            roots.append(shared.appendingPathComponent("Workspace-iOS27/AI Models/Incoming", isDirectory: true))
+        }
+#endif
+        let allowed = Set(["gguf", "ggml", "safetensors", "mlmodel", "mlpackage", "onnx", "bin", "model"])
+        var results: [URL] = []
+        for root in roots {
+            guard let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey], options: [.skipsHiddenFiles]) else { continue }
+            for case let url as URL in enumerator {
+                guard (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) != true,
+                      allowed.contains(url.pathExtension.lowercased()) else { continue }
+                results.append(url)
+            }
+        }
+        return results.reduce(into: [String: URL]()) { $0[$1.standardizedFileURL.path] = $1 }
+            .values
+            .sorted { $0.path.localizedCaseInsensitiveCompare($1.path) == .orderedAscending }
+    }
+
     func select(_ model: WorkspaceAIModelDescriptor) {
         selectedModelID = model.id
         status = model.isInstalled
@@ -310,19 +344,26 @@ final class WorkspaceAIChatModel: ObservableObject {
         do {
             let ext = sourceURL.pathExtension.isEmpty ? "bin" : sourceURL.pathExtension
             let destination = modelDirectory.appendingPathComponent("\(model.id).\(ext)", isDirectory: false)
-            if FileManager.default.fileExists(atPath: destination.path) {
-                try FileManager.default.removeItem(at: destination)
+            if sourceURL.standardizedFileURL != destination.standardizedFileURL,
+               fileManager.fileExists(atPath: destination.path) {
+                try fileManager.removeItem(at: destination)
             }
-            try FileManager.default.copyItem(at: sourceURL, to: destination)
+            if sourceURL.standardizedFileURL != destination.standardizedFileURL {
+                try fileManager.copyItem(at: sourceURL, to: destination)
+            }
             guard let index = models.firstIndex(where: { $0.id == model.id }) else { return false }
             models[index].modelFileName = destination.lastPathComponent
-            status = "\(model.name) is installed. An inference runtime is still required to generate replies."
+            status = "\(model.name) is ready in Workspace Files / AI Models."
             persist()
             return true
         } catch {
             status = "Could not import model: \(error.localizedDescription)"
             return false
         }
+    }
+
+    func importWorkspaceModel(from sourceURL: URL) -> Bool {
+        importModel(from: sourceURL)
     }
 
     func remove(_ model: WorkspaceAIModelDescriptor) {
@@ -407,9 +448,14 @@ final class WorkspaceAIChatModel: ObservableObject {
 }
 
 struct WorkspaceAIChatView: View {
-    @StateObject private var model = WorkspaceAIChatModel()
-    @State private var showingModelImporter = false
+    @ObservedObject var store: WorkspaceStore
+    @StateObject private var model: WorkspaceAIChatModel
     @State private var showingModelSheet = false
+
+    init(store: WorkspaceStore) {
+        _store = ObservedObject(wrappedValue: store)
+        _model = StateObject(wrappedValue: WorkspaceAIChatModel(store: store))
+    }
 
     var body: some View {
         NavigationStack {
@@ -464,8 +510,15 @@ struct WorkspaceAIChatView: View {
                 }
             }
             .sheet(isPresented: $showingModelSheet) { modelSheet }
-            .fileImporter(isPresented: $showingModelImporter, allowedContentTypes: [.data, .item], allowsMultipleSelection: false) { result in
-                if case .success(let urls) = result, let url = urls.first { _ = model.importModel(from: url) }
+            .onDrop(of: [UTType.fileURL.identifier, UTType.item.identifier], isTargeted: nil) { providers in
+                guard let provider = providers.first else { return false }
+                provider.loadFileRepresentation(forTypeIdentifier: UTType.item.identifier) { url, _ in
+                    guard let url else { return }
+                    Task { @MainActor in
+                        _ = model.importWorkspaceModel(from: url)
+                    }
+                }
+                return true
             }
         }
     }
@@ -507,13 +560,25 @@ struct WorkspaceAIChatView: View {
                     }
                 }
                 Section("Selected model") {
-                    Button { showingModelSheet = false; showingModelImporter = true } label: {
-                        Label(model.selectedModel?.isInstalled == true ? "Replace model file" : "Import model file", systemImage: "square.and.arrow.down")
-                    }
+                    Label("Choose from Workspace Files", systemImage: "folder.fill")
                     Text(model.status).font(.footnote).foregroundStyle(.secondary)
-                    Text("Model weights are not bundled in the IPA. Import a compatible file such as GGUF, then connect an embedded inference backend before expecting generated replies.")
+                    Text("Share or drag a model into Workspace Files/AI Models, then select it here. Model weights are external assets; the app does not claim a model is ready until it can read the file.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
+                }
+                let workspaceFiles = model.workspaceModelFiles()
+                if !workspaceFiles.isEmpty {
+                    Section("Workspace Files") {
+                        ForEach(workspaceFiles, id: \.path) { file in
+                            Button {
+                                _ = model.importModel(from: file)
+                                showingModelSheet = false
+                            } label: {
+                                Label(file.lastPathComponent, systemImage: "doc.fill")
+                                    .lineLimit(1)
+                            }
+                        }
+                    }
                 }
             }
             .navigationTitle("AI models")
