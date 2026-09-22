@@ -21,11 +21,19 @@ struct WorkspaceDownloadableModule: Codable, Hashable, Identifiable {
     let releaseURL: URL?
 
     var installedFileName: String {
-        let safeTitle = title
-            .replacingOccurrences(of: "/", with: "-")
-            .replacingOccurrences(of: "\\", with: "-")
-            .replacingOccurrences(of: " ", with: "-")
-        return "\(safeTitle)-\(version).workspace-module"
+        let safeTitle = Self.safeFilenameComponent(title)
+        let safeVersion = Self.safeFilenameComponent(version)
+        return "\(safeTitle)-\(safeVersion).workspace-module"
+    }
+
+    private static func safeFilenameComponent(_ value: String) -> String {
+        let sanitized = value.replacingOccurrences(
+            of: "[^A-Za-z0-9._-]",
+            with: "-",
+            options: .regularExpression
+        )
+        let trimmed = sanitized.trimmingCharacters(in: CharacterSet(charactersIn: ".-"))
+        return String((trimmed.isEmpty ? "module" : trimmed).prefix(80))
     }
 
     var moduleID: WorkspaceModuleID? { WorkspaceModuleID(rawValue: id) }
